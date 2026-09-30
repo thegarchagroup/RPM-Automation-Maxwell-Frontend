@@ -38,12 +38,24 @@ interface TableRow {
   block4: TableCell;
 }
 
+// Derive the current quarter string from today's date
+const getCurrentQuarter = (): { year: number; quarter: string } => {
+  const now = new Date();
+  const month = now.getMonth() + 1; // 1-based
+  const year = now.getFullYear();
+  if (month >= 1 && month <= 4) return { year, quarter: '1st Quarter Jan-April' };
+  if (month >= 5 && month <= 8) return { year, quarter: '2nd Quarter May-August' };
+  if (month >= 9 && month <= 9) return { year, quarter: '3rd Quarter Sep-Dec' };
+  return { year, quarter: '4th Quarter Oct-Dec' };
+};
+
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
 
-  // Filter States
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('2nd Quarter May-August');
+  // Filter States — default to the current calendar quarter
+  const { year: currentYear, quarter: currentQuarter } = getCurrentQuarter();
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+  const [selectedQuarter, setSelectedQuarter] = useState<string>(currentQuarter);
   const [statusFilter, setStatusFilter] = useState<'all' | 'Done' | 'Pending'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
