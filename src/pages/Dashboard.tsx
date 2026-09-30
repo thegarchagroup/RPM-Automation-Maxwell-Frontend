@@ -26,6 +26,7 @@ interface TableCell {
   ac: string;
   housekeeping: string;
   inspection: string;
+  status: string;
   isPublicHeader?: boolean;
   recordId?: number;
 }
@@ -46,9 +47,9 @@ export const Dashboard: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | 'Done' | 'Pending'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Records & Loading state
   const [records, setRecords] = useState<RpmRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
   // Load records from backend API
@@ -61,11 +62,14 @@ export const Dashboard: React.FC = () => {
         status: statusFilter !== 'all' ? statusFilter : undefined,
         search: searchQuery.trim() ? searchQuery.trim() : undefined,
       });
+      setIsBackendConnected(true);
       if (data) {
         setRecords(data);
       }
     } catch (err) {
-      console.warn('Backend sync note: Using local matrix with optimistic persistence', err);
+      setIsBackendConnected(false);
+      setRecords([]);
+      console.warn('Backend sync failed. Hiding table as requested.', err);
     } finally {
       setIsLoading(false);
     }
@@ -116,44 +120,22 @@ export const Dashboard: React.FC = () => {
             eng: matched.eng_date || '',
             ac: matched.ac_servicing || '',
             housekeeping: matched.housekeeping || '',
-            inspection: matched.inspection_status === 'Done' ? 'Done' : '',
+            inspection: matched.inspection_date || '',
+            status: matched.inspection_status === 'Done' ? 'Done' : 'Pending',
+            isPublicHeader: defaultCell.isPublicHeader,
             recordId: matched.id,
           };
         }
 
-        // If backend returned filtered records and this room wasn't included
-        if (records.length > 0 && (statusFilter !== 'all' || searchQuery.trim() !== '')) {
-          return {
-            room: defaultCell.room,
-            eng: '',
-            ac: '',
-            housekeeping: '',
-            inspection: '',
-          };
-        }
-
-        // Shift fallback dates dynamically if viewing other quarters/years
-        if (selectedYear !== 2026 || !selectedQuarter.includes('2')) {
-          const shiftDate = (d: string) => {
-            if (!d || d.length < 10) return d;
-            const parts = d.split('-');
-            if (parts.length !== 3) return d;
-            let m = parseInt(parts[1], 10);
-            if (selectedQuarter.includes('1')) m = Math.max(1, m - 4);
-            else if (selectedQuarter.includes('3')) m = Math.min(12, m + 4);
-            else if (selectedQuarter.includes('4')) m = Math.min(12, m + 5);
-            return `${selectedYear}-${String(m).padStart(2, '0')}-${parts[2]}`;
-          };
-
-          return {
-            ...defaultCell,
-            eng: defaultCell.eng ? shiftDate(defaultCell.eng) : '',
-            ac: defaultCell.ac && defaultCell.ac.includes('-') ? shiftDate(defaultCell.ac) : defaultCell.ac,
-            inspection: selectedYear < 2026 ? 'Done' : selectedYear > 2026 ? '' : defaultCell.inspection,
-          };
-        }
-
-        return defaultCell;
+        return {
+          room: defaultCell.room,
+          eng: '',
+          ac: '',
+          housekeeping: '',
+          inspection: '',
+          status: '',
+          isPublicHeader: defaultCell.isPublicHeader,
+        };
       };
 
       return {
@@ -165,10 +147,9 @@ export const Dashboard: React.FC = () => {
     });
   }, [records, selectedYear, selectedQuarter, statusFilter, searchQuery]);
 
-  // Toggle inspection status (Done <-> Blank)
   const handleToggleCellStatus = async (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader) return;
-    const newStatus = cell.inspection === 'Done' ? 'Pending' : 'Done';
+    const newStatus = cell.status === 'Done' ? 'Pending' : 'Done';
 
     if (cell.recordId) {
       try {
@@ -207,19 +188,19 @@ export const Dashboard: React.FC = () => {
   // 1. Download as CSV
   const handleDownloadCSV = () => {
     const headers = [
-      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
       [
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
       ],
       [
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
       ],
     ];
 
@@ -229,24 +210,28 @@ export const Dashboard: React.FC = () => {
       r.block1.ac,
       r.block1.housekeeping,
       r.block1.inspection,
+      r.block1.status,
 
       r.block2.room,
       r.block2.eng,
       r.block2.ac,
       r.block2.housekeeping,
       r.block2.inspection,
+      r.block2.status,
 
       r.block3.room,
       r.block3.eng,
       r.block3.ac,
       r.block3.housekeeping,
       r.block3.inspection,
+      r.block3.status,
 
       r.block4.room,
       r.block4.eng,
       r.block4.ac,
       r.block4.housekeeping,
       r.block4.inspection,
+      r.block4.status,
     ]);
 
     const csvContent = [...headers, ...dataRows]
@@ -279,19 +264,19 @@ export const Dashboard: React.FC = () => {
   // 2. Download as XLSX (Excel spreadsheet)
   const handleDownloadXLSX = () => {
     const aoa: any[][] = [
-      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
       [
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM', quarterHeaderTitle, '', '', '', '',
       ],
       [
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
       ],
     ];
 
@@ -302,52 +287,56 @@ export const Dashboard: React.FC = () => {
         r.block1.ac,
         r.block1.housekeeping,
         r.block1.inspection,
+        r.block1.status,
 
         r.block2.room,
         r.block2.eng,
         r.block2.ac,
         r.block2.housekeeping,
         r.block2.inspection,
+        r.block2.status,
 
         r.block3.room,
         r.block3.eng,
         r.block3.ac,
         r.block3.housekeeping,
         r.block3.inspection,
+        r.block3.status,
 
         r.block4.room,
         r.block4.eng,
         r.block4.ac,
         r.block4.housekeeping,
         r.block4.inspection,
+        r.block4.status,
       ]);
     });
 
     const worksheet = XLSX.utils.aoa_to_sheet(aoa);
 
     worksheet['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 19 } }, // MAXWELL RESERVE
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 19 } }, // RPM {year}
-      { s: { r: 2, c: 1 }, e: { r: 2, c: 4 } }, // Block 1 Quarter
-      { s: { r: 2, c: 6 }, e: { r: 2, c: 9 } }, // Block 2 Quarter
-      { s: { r: 2, c: 11 }, e: { r: 2, c: 14 } }, // Block 3 Quarter
-      { s: { r: 2, c: 16 }, e: { r: 2, c: 19 } }, // Block 4 Quarter
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 23 } }, // MAXWELL RESERVE
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 23 } }, // RPM {year}
+      { s: { r: 2, c: 1 }, e: { r: 2, c: 5 } }, // Block 1 Quarter
+      { s: { r: 2, c: 7 }, e: { r: 2, c: 11 } }, // Block 2 Quarter
+      { s: { r: 2, c: 13 }, e: { r: 2, c: 17 } }, // Block 3 Quarter
+      { s: { r: 2, c: 19 }, e: { r: 2, c: 23 } }, // Block 4 Quarter
     ];
 
     tableRows.forEach((r, idx) => {
       if (r.block1.isPublicHeader) {
         worksheet['!merges']?.push({
           s: { r: idx + 4, c: 0 },
-          e: { r: idx + 4, c: 4 },
+          e: { r: idx + 4, c: 5 },
         });
       }
     });
 
     worksheet['!cols'] = [
-      { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 13 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 },
+      { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
+      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
+      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
+      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -360,8 +349,8 @@ export const Dashboard: React.FC = () => {
 
   // Helper renderer for modern status badge
   const renderInspectionBadge = (cell: TableCell) => {
-    if (!cell.room || cell.isPublicHeader) return null;
-    const isDone = cell.inspection === 'Done';
+    if (!cell.room || cell.isPublicHeader || !cell.status) return null;
+    const isDone = cell.status === 'Done';
 
     return (
       <button
@@ -566,14 +555,25 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Modern 4-Block Floor Grid Interface */}
-        <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden">
+        {isBackendConnected === false ? (
+          <div className="bg-white p-16 rounded-3xl border border-slate-200/90 shadow-xl flex flex-col items-center justify-center text-center h-[50vh]">
+            <ShieldCheck className="w-20 h-20 text-slate-200 mb-6" />
+            <h3 className="text-2xl font-bold text-slate-700 mb-3">Backend Offline</h3>
+            <p className="text-slate-500 max-w-lg text-sm leading-relaxed">
+              The inspection matrix data is pulled exclusively from the live database. 
+              Please ensure the backend server is running to view the RPM schedule. 
+              The table is hidden while disconnected.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse min-w-[1360px]">
               {/* Floor Sector Super-Headers */}
               <thead>
                 <tr className="bg-slate-900 text-white text-xs font-bold border-b border-slate-800">
                   {/* Block 1 Header */}
-                  <th colSpan={5} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-amber-400"></div>
@@ -586,7 +586,7 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 2 Header */}
-                  <th colSpan={5} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-blue-400"></div>
@@ -599,7 +599,7 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 3 Header */}
-                  <th colSpan={5} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-indigo-400"></div>
@@ -612,7 +612,7 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 4 Header */}
-                  <th colSpan={5} className="py-3 px-4 w-[25%]">
+                  <th colSpan={6} className="py-3 px-4 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-emerald-400"></div>
@@ -628,32 +628,36 @@ export const Dashboard: React.FC = () => {
                 {/* Sub-Column Headers */}
                 <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">
                   {/* Block 1 */}
-                  <th className="py-2.5 px-3 w-[6%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[7%] border-r border-slate-100">AC Service</th>
+                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
+                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
                   <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
+                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
 
                   {/* Block 2 */}
-                  <th className="py-2.5 px-3 w-[6%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[7%] border-r border-slate-100">AC Service</th>
+                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
+                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
                   <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
+                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
 
                   {/* Block 3 */}
-                  <th className="py-2.5 px-3 w-[6%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[7%] border-r border-slate-100">AC Service</th>
+                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
+                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
                   <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
+                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
 
                   {/* Block 4 */}
-                  <th className="py-2.5 px-3 w-[6%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[7%] border-r border-slate-100">AC Service</th>
+                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
+                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
                   <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[4%] text-center">Status</th>
+                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
+                  <th className="py-2.5 px-2 w-[3%] text-center">Status</th>
                 </tr>
               </thead>
 
@@ -665,7 +669,7 @@ export const Dashboard: React.FC = () => {
                       {/* ================= BLOCK 1 ================= */}
                       {row.block1.isPublicHeader ? (
                         <td
-                          colSpan={5}
+                          colSpan={6}
                           className="py-2 px-3 bg-gradient-to-r from-amber-50 via-amber-100/50 to-amber-50 border-r-2 border-slate-300 border-y border-amber-200/80"
                         >
                           <div className="flex items-center justify-center gap-2">
@@ -691,6 +695,9 @@ export const Dashboard: React.FC = () => {
                           <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
                             {row.block1.housekeeping || <span className="text-slate-300">—</span>}
                           </td>
+                          <td className="py-2 px-2 border-r border-slate-100">
+                            {renderDateBadge(row.block1.inspection)}
+                          </td>
                           <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                             {renderInspectionBadge(row.block1)}
                           </td>
@@ -712,6 +719,9 @@ export const Dashboard: React.FC = () => {
                       <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
                         {row.block2.housekeeping || <span className="text-slate-300">—</span>}
                       </td>
+                      <td className="py-2 px-2 border-r border-slate-100">
+                        {renderDateBadge(row.block2.inspection)}
+                      </td>
                       <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                         {renderInspectionBadge(row.block2)}
                       </td>
@@ -731,6 +741,9 @@ export const Dashboard: React.FC = () => {
                       <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
                         {row.block3.housekeeping || <span className="text-slate-300">—</span>}
                       </td>
+                      <td className="py-2 px-2 border-r border-slate-100">
+                        {renderDateBadge(row.block3.inspection)}
+                      </td>
                       <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                         {renderInspectionBadge(row.block3)}
                       </td>
@@ -749,6 +762,9 @@ export const Dashboard: React.FC = () => {
                       </td>
                       <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
                         {row.block4.housekeeping || <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2 px-2 border-r border-slate-100">
+                        {renderDateBadge(row.block4.inspection)}
                       </td>
                       <td className="py-2 px-2 text-center">
                         {renderInspectionBadge(row.block4)}
@@ -794,6 +810,7 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+        )}
       </main>
     </div>
   );
