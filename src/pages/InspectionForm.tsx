@@ -345,25 +345,27 @@ export const InspectionForm: React.FC = () => {
     saveInspectionState({ isSubmitted: true, submittedAt: nowStr });
 
     // Sync inspection report to FastAPI backend
-    api.submitInspection({
-      room_number: roomNumber,
-      room_type: roomType,
-      inspection_date: formatDisplayDate(selectedDate),
-      status: 'submitted',
-      maintenance_carried_by: maintenanceCarriedBy,
-      inspected_by: inspectedBy || undefined,
-      signature_url: maintenanceSignatureUrl,
-      overall_remark: overallRemark,
-      items: Object.values(itemsMap).map((it) => ({
-        checklist_item_id: it.checklist_item_id,
-        result: it.result || 'PASS',
-        remark: it.remark,
-      })),
-    }).catch((err) => {
+    try {
+      await api.submitInspection({
+        room_number: roomNumber,
+        room_type: roomType,
+        inspection_date: formatDisplayDate(selectedDate),
+        status: 'submitted',
+        maintenance_carried_by: maintenanceCarriedBy,
+        inspected_by: inspectedBy || undefined,
+        signature_url: maintenanceSignatureUrl,
+        overall_remark: overallRemark,
+        items: Object.values(itemsMap).map((it) => ({
+          checklist_item_id: it.checklist_item_id,
+          result: it.result || 'PASS',
+          remark: it.remark,
+        })),
+      });
+    } catch (err) {
       console.warn('Backend inspection sync note:', err);
-    });
+    }
 
-    // Also update RPM record in schedule table to Done
+    // Also update RPM record in schedule table to Pending
     try {
       const year = parseInt(selectedDate.split('-')[0], 10) || 2026;
       const records = await api.getRpmRecords({ year, quarter: selectedQuarter });

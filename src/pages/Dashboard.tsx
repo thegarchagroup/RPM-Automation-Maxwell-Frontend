@@ -15,6 +15,7 @@ import {
   Check,
   Building2,
   ShieldCheck,
+  FileDown,
 } from 'lucide-react';
 
 // Static template matrix containing exact room layout and initial fallback
@@ -368,24 +369,18 @@ export const Dashboard: React.FC = () => {
     showToast('Excel spreadsheet (.xlsx) downloaded successfully!');
   };
 
-  // Helper renderer for modern status badge
+  // Helper renderer for modern status badge (display-only)
   const renderInspectionBadge = (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader || !cell.status) return null;
     const isDone = cell.status === 'Done';
 
     return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          handleToggleCellStatus(cell);
-        }}
-        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all select-none cursor-pointer ${
+      <span
+        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold select-none ${
           isDone
-            ? 'bg-amber-400/90 hover:bg-amber-400 text-slate-950 shadow-sm ring-1 ring-amber-500/30'
-            : 'bg-slate-100 hover:bg-slate-200 text-slate-400 hover:text-slate-600 border border-slate-200'
+            ? 'bg-amber-400/90 text-slate-950 shadow-sm ring-1 ring-amber-500/30'
+            : 'bg-slate-100 text-slate-400 border border-slate-200'
         }`}
-        title="Click to toggle Done / Pending status"
       >
         {isDone ? (
           <>
@@ -395,7 +390,7 @@ export const Dashboard: React.FC = () => {
         ) : (
           <span>Pending</span>
         )}
-      </button>
+      </span>
     );
   };
 
@@ -429,6 +424,44 @@ export const Dashboard: React.FC = () => {
       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
         {dateStr}
       </span>
+    );
+  };
+
+  // Download inspection PDF from Dropbox
+  const handleDownloadInspectionPdf = async (cell: TableCell) => {
+    if (!cell.inspection || !cell.room) return;
+    try {
+      showToast(`Fetching PDF for ${cell.room}...`, 'info');
+      const result = await api.getDropboxDownloadLink({
+        room_number: cell.room,
+        inspection_date: cell.inspection,
+        year: selectedYear,
+        quarter: selectedQuarter,
+      });
+      if (result.download_url) {
+        window.open(result.download_url, '_blank');
+      }
+    } catch (err: any) {
+      showToast(`PDF not found: ${err.message || 'File may not exist in Dropbox'}`, 'info');
+    }
+  };
+
+  // Render clickable inspection date that downloads PDF from Dropbox
+  const renderInspectionDate = (cell: TableCell) => {
+    if (!cell.inspection) return <span className="text-slate-300 text-[11px]">—</span>;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleDownloadInspectionPdf(cell);
+        }}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-blue-50 text-blue-700 border border-blue-200/80 hover:bg-blue-100 hover:border-blue-300 transition cursor-pointer group"
+        title={`Download inspection PDF for ${cell.room}`}
+      >
+        <FileDown className="w-3 h-3 text-blue-500 group-hover:text-blue-700 transition" />
+        <span>{cell.inspection}</span>
+      </button>
     );
   };
 
@@ -716,7 +749,7 @@ export const Dashboard: React.FC = () => {
                             {row.block1.housekeeping || <span className="text-slate-300">—</span>}
                           </td>
                           <td className="py-2 px-2 border-r border-slate-100">
-                            {renderDateBadge(row.block1.inspection)}
+                            {renderInspectionDate(row.block1)}
                           </td>
                           <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                             {renderInspectionBadge(row.block1)}
@@ -740,7 +773,7 @@ export const Dashboard: React.FC = () => {
                         {row.block2.housekeeping || <span className="text-slate-300">—</span>}
                       </td>
                       <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block2.inspection)}
+                        {renderInspectionDate(row.block2)}
                       </td>
                       <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                         {renderInspectionBadge(row.block2)}
@@ -762,7 +795,7 @@ export const Dashboard: React.FC = () => {
                         {row.block3.housekeeping || <span className="text-slate-300">—</span>}
                       </td>
                       <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block3.inspection)}
+                        {renderInspectionDate(row.block3)}
                       </td>
                       <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
                         {renderInspectionBadge(row.block3)}
@@ -784,7 +817,7 @@ export const Dashboard: React.FC = () => {
                         {row.block4.housekeeping || <span className="text-slate-300">—</span>}
                       </td>
                       <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block4.inspection)}
+                        {renderInspectionDate(row.block4)}
                       </td>
                       <td className="py-2 px-2 text-center">
                         {renderInspectionBadge(row.block4)}

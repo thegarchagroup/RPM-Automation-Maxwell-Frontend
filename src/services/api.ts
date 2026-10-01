@@ -223,4 +223,27 @@ export const api = {
     }
     return res.json();
   },
+
+  // Get a temporary download link for an inspection PDF from Dropbox
+  async getDropboxDownloadLink(params: {
+    room_number: string;
+    inspection_date: string;
+    year: number;
+    quarter: string;
+  }): Promise<{ success: boolean; download_url: string; filename: string; path: string }> {
+    const query = new URLSearchParams();
+    query.append('room_number', params.room_number);
+    query.append('inspection_date', params.inspection_date);
+    query.append('year', String(params.year));
+    query.append('quarter', params.quarter);
+
+    const res = await fetch(`${API_BASE}/dropbox/download-link?${query.toString()}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to get download link (${res.status})`);
+    }
+    return res.json();
+  },
 };
