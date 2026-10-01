@@ -70,7 +70,7 @@ export const InspectionForm: React.FC = () => {
   const [roomNumber, setRoomNumber] = useState<string>(urlRoom || '101');
   const [roomType, setRoomType] = useState<string>(urlType || 'Deluxe');
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('2nd Quarter (May - August)');
+  const [selectedQuarter, setSelectedQuarter] = useState<string>('3rd Quarter (July - Sept)');
 
   // Sign-off names & signatures
   const [maintenanceCarriedBy, setMaintenanceCarriedBy] = useState<string>(
@@ -363,8 +363,8 @@ export const InspectionForm: React.FC = () => {
 
       if (matched) {
         await api.updateRpmRecord(matched.id, {
-          inspection_status: 'Done',
-          eng_date: selectedDate,
+          inspection_status: 'Pending',
+          inspection_date: selectedDate,
         });
       }
     } catch (e) {
@@ -955,9 +955,9 @@ export const InspectionForm: React.FC = () => {
                       }}
                       className="w-full text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 cursor-pointer shadow-sm"
                     >
-                      <option value="2nd Quarter (May - August)">2nd Quarter (May - August)</option>
-                      <option value="1st Quarter (Jan - April)">1st Quarter (Jan - April)</option>
-                      <option value="3rd Quarter (Sep - Dec)">3rd Quarter (Sep - Dec)</option>
+                      <option value="1st Quarter (Jan - March)">1st Quarter (Jan - March)</option>
+                      <option value="2nd Quarter (April - June)">2nd Quarter (April - June)</option>
+                      <option value="3rd Quarter (July - Sept)">3rd Quarter (July - Sept)</option>
                       <option value="4th Quarter (Oct - Dec)">4th Quarter (Oct - Dec)</option>
                     </select>
                   </div>
