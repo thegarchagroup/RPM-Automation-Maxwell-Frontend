@@ -35,6 +35,18 @@ const getTodayDateString = () => {
   return `${year}-${month}-${day}`;
 };
 
+const getQuarterFromDate = (dateStr: string): string => {
+  if (!dateStr) return '1st Quarter (Jan - April)';
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    const month = parseInt(parts[1], 10);
+    if (month >= 1 && month <= 4) return '1st Quarter (Jan - April)';
+    if (month >= 5 && month <= 8) return '2nd Quarter (May - August)';
+    if (month >= 9 && month <= 12) return '3rd Quarter (Sept - Dec)';
+  }
+  return '1st Quarter (Jan - April)';
+};
+
 const formatDisplayDate = (dateStr: string) => {
   if (!dateStr) return '';
   const parts = dateStr.split('-');
@@ -70,7 +82,7 @@ export const InspectionForm: React.FC = () => {
   const [roomNumber, setRoomNumber] = useState<string>(urlRoom || '101');
   const [roomType, setRoomType] = useState<string>(urlType || 'Deluxe');
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('3rd Quarter (July - Sept)');
+  const [selectedQuarter, setSelectedQuarter] = useState<string>(getQuarterFromDate(getTodayDateString()));
 
   // Sign-off names & signatures
   const [maintenanceCarriedBy, setMaintenanceCarriedBy] = useState<string>(
@@ -928,7 +940,9 @@ export const InspectionForm: React.FC = () => {
                         disabled={isSubmitted}
                         value={selectedDate}
                         onChange={(e) => {
-                          setSelectedDate(e.target.value);
+                          const newDate = e.target.value;
+                          setSelectedDate(newDate);
+                          setSelectedQuarter(getQuarterFromDate(newDate));
                           triggerAutosave();
                         }}
                         className="w-full text-sm font-bold text-slate-900 bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 cursor-pointer shadow-sm"
@@ -955,10 +969,9 @@ export const InspectionForm: React.FC = () => {
                       }}
                       className="w-full text-xs font-bold text-slate-900 bg-white border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100 cursor-pointer shadow-sm"
                     >
-                      <option value="1st Quarter (Jan - March)">1st Quarter (Jan - March)</option>
-                      <option value="2nd Quarter (April - June)">2nd Quarter (April - June)</option>
-                      <option value="3rd Quarter (July - Sept)">3rd Quarter (July - Sept)</option>
-                      <option value="4th Quarter (Oct - Dec)">4th Quarter (Oct - Dec)</option>
+                      <option value="1st Quarter (Jan - April)">1st Quarter (Jan - April)</option>
+                      <option value="2nd Quarter (May - August)">2nd Quarter (May - August)</option>
+                      <option value="3rd Quarter (Sept - Dec)">3rd Quarter (Sept - Dec)</option>
                     </select>
                   </div>
                 </div>

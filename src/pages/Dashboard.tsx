@@ -43,10 +43,9 @@ const getCurrentQuarter = (): { year: number; quarter: string } => {
   const now = new Date();
   const month = now.getMonth() + 1; // 1-based
   const year = now.getFullYear();
-  if (month >= 1 && month <= 3) return { year, quarter: '1st Quarter Jan-March' };
-  if (month >= 4 && month <= 6) return { year, quarter: '2nd Quarter April-June' };
-  if (month >= 7 && month <= 9) return { year, quarter: '3rd Quarter July-Sept' };
-  return { year, quarter: '4th Quarter Oct-Dec' };
+  if (month >= 1 && month <= 4) return { year, quarter: '1st Quarter (Jan - April)' };
+  if (month >= 5 && month <= 8) return { year, quarter: '2nd Quarter (May - August)' };
+  return { year, quarter: '3rd Quarter (Sept - Dec)' };
 };
 
 export const Dashboard: React.FC = () => {
@@ -101,16 +100,13 @@ export const Dashboard: React.FC = () => {
   const quarterHeaderTitle = useMemo(() => {
     const shortYr = String(selectedYear).slice(-2);
     if (selectedQuarter.includes('1st') || selectedQuarter.includes('Jan')) {
-      return `1st Quarter Jan-March ${shortYr}`;
+      return `1st Quarter Jan-April ${shortYr}`;
     }
-    if (selectedQuarter.includes('2nd') || selectedQuarter.includes('April')) {
-      return `2nd Quarter April-June ${shortYr}`;
+    if (selectedQuarter.includes('2nd') || selectedQuarter.includes('May')) {
+      return `2nd Quarter May-August ${shortYr}`;
     }
-    if (selectedQuarter.includes('3rd') || selectedQuarter.includes('July')) {
-      return `3rd Quarter July-Sept ${shortYr}`;
-    }
-    if (selectedQuarter.includes('4th') || selectedQuarter.includes('Oct')) {
-      return `4th Quarter Oct-Dec ${shortYr}`;
+    if (selectedQuarter.includes('3rd') || selectedQuarter.includes('Sept') || selectedQuarter.includes('Sep')) {
+      return `3rd Quarter Sept-Dec ${shortYr}`;
     }
     return `${selectedQuarter} ${shortYr}`;
   }, [selectedQuarter, selectedYear]);
@@ -474,10 +470,9 @@ export const Dashboard: React.FC = () => {
                 onChange={(e) => setSelectedQuarter(e.target.value)}
                 className="py-2 px-3 rounded-xl text-xs font-bold bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer shadow-sm transition min-w-[210px]"
               >
-                <option value="1st Quarter Jan-March">1st Quarter (Jan - March)</option>
-                <option value="2nd Quarter April-June">2nd Quarter (April - June)</option>
-                <option value="3rd Quarter July-Sept">3rd Quarter (July - Sept)</option>
-                <option value="4th Quarter Oct-Dec">4th Quarter (Oct - Dec)</option>
+                <option value="1st Quarter (Jan - April)">1st Quarter (Jan - April)</option>
+                <option value="2nd Quarter (May - August)">2nd Quarter (May - August)</option>
+                <option value="3rd Quarter (Sept - Dec)">3rd Quarter (Sept - Dec)</option>
               </select>
             </div>
 
