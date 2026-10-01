@@ -168,17 +168,30 @@ export const Dashboard: React.FC = () => {
         showToast(`Locally updated ${cell.room} to ${newStatus}`, 'info');
       }
     } else {
-      // Optimistic local update
-      setRecords((prev) => {
-        const existing = prev.find((r) => r.room_or_area.toLowerCase() === cell.room.toLowerCase());
-        if (existing) {
-          return prev.map((r) =>
-            r.id === existing.id ? { ...r, inspection_status: newStatus } : r
-          );
-        }
-        return prev;
-      });
-      showToast(`Updated ${cell.room} inspection to ${newStatus}`);
+      try {
+        await api.createRpmRecord({
+          room_or_area: cell.room,
+          category: 'guest_room',
+          floor: `Floor ${cell.room.replace(/[^0-9]/g, '').charAt(0) || '1'}`, // Basic heuristic
+          quarter: selectedQuarter,
+          year: selectedYear,
+          inspection_status: newStatus,
+        });
+        showToast(`Created and updated ${cell.room} inspection to ${newStatus}`);
+        await loadData();
+      } catch (e) {
+        // Optimistic local update
+        setRecords((prev) => {
+          const existing = prev.find((r) => r.room_or_area.toLowerCase() === cell.room.toLowerCase());
+          if (existing) {
+            return prev.map((r) =>
+              r.id === existing.id ? { ...r, inspection_status: newStatus } : r
+            );
+          }
+          return prev;
+        });
+        showToast(`Locally updated ${cell.room} to ${newStatus}`, 'info');
+      }
     }
   };
 

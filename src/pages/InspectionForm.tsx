@@ -280,7 +280,7 @@ export const InspectionForm: React.FC = () => {
         return rClean === cleanTarget || r.room_or_area.toLowerCase() === room.toLowerCase().trim();
       });
 
-      if (matched && matched.inspection_status === 'Done') {
+      if (matched && (matched.inspection_date || matched.inspection_status === 'Done')) {
         return true;
       }
     } catch (e) {
@@ -325,7 +325,7 @@ export const InspectionForm: React.FC = () => {
     setIsCheckingDuplicate(false);
 
     if (isDuplicate) {
-      const msg = `Room ${roomNumber} has ALREADY been inspected for ${selectedQuarter}. Duplicate inspection submissions for the same quarter are blocked.`;
+      const msg = `Room ${roomNumber} has ALREADY been submitted for ${selectedQuarter}. Duplicate inspection submissions for the same quarter are blocked.`;
       setDuplicateAlert(msg);
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
@@ -375,6 +375,16 @@ export const InspectionForm: React.FC = () => {
 
       if (matched) {
         await api.updateRpmRecord(matched.id, {
+          inspection_status: 'Pending',
+          inspection_date: selectedDate,
+        });
+      } else {
+        await api.createRpmRecord({
+          room_or_area: roomNumber.toLowerCase().includes('room') ? roomNumber : `Room ${roomNumber}`,
+          category: 'guest_room',
+          floor: `Floor ${roomNumber.charAt(0)}`, // Basic heuristic
+          quarter: selectedQuarter,
+          year: year,
           inspection_status: 'Pending',
           inspection_date: selectedDate,
         });

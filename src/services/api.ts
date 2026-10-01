@@ -114,6 +114,19 @@ export const api = {
     return res.json();
   },
 
+  // Create an RPM record
+  async createRpmRecord(data: Partial<RpmRecord>): Promise<RpmRecord> {
+    const res = await fetch(`${API_BASE}/rpm/records`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to create RPM record (${res.status})`);
+    }
+    return res.json();
+  },
+
   // Update an RPM record (e.g. toggle Done/Pending or change dates)
   async updateRpmRecord(id: number, data: Partial<RpmRecord>): Promise<RpmRecord> {
     const res = await fetch(`${API_BASE}/rpm/records/${id}`, {
@@ -123,18 +136,6 @@ export const api = {
     });
     if (!res.ok) {
       throw new Error(`Failed to update RPM record (${res.status})`);
-    }
-    return res.json();
-  },
-
-  // Reseed data from CSV file
-  async reseedRpmData(): Promise<{ message: string }> {
-    const res = await fetch(`${API_BASE}/rpm/seed`, {
-      method: 'POST',
-      headers: getHeaders(),
-    });
-    if (!res.ok) {
-      throw new Error(`Failed to reseed database (${res.status})`);
     }
     return res.json();
   },
