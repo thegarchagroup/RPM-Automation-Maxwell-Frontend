@@ -26,7 +26,9 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 export function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      {/* basename comes from `base` in vite.config.ts ('/rpm/'), so routes
+          like /dashboard resolve to /rpm/dashboard on the server. */}
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
