@@ -12,6 +12,7 @@ export interface RpmRecord {
   ac_servicing: string | null;
   housekeeping: string | null;
   inspection_status: string; // "Done" | "Pending" | "In Progress"
+  inspection_date?: string | null;
   remarks?: string | null;
   sort_order: number;
   created_at: string;

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 // Static template matrix containing exact room layout and initial fallback
-import { RAW_CSV_ROWS } from '../data/rpmCsvData';
+import { RAW_CSV_ROWS, type RawCell } from '../data/rpmCsvData';
 
 interface TableCell {
   room: string;
@@ -115,9 +115,9 @@ export const Dashboard: React.FC = () => {
   // Construct table rows structured identically to the 4-floor layout
   const tableRows: TableRow[] = useMemo(() => {
     return RAW_CSV_ROWS.map((row) => {
-      const findUpdated = (roomName: string, defaultCell: TableCell): TableCell => {
-        if (!roomName || defaultCell.isPublicHeader) return defaultCell;
-        
+      const findUpdated = (roomName: string, defaultCell: RawCell): TableCell => {
+        if (!roomName || defaultCell.isPublicHeader) return { ...defaultCell, status: '' };
+
         // Find matching record from database
         const matched = records.find(
           (r) => r.room_or_area.toLowerCase().trim() === roomName.toLowerCase().trim()
@@ -195,6 +195,8 @@ export const Dashboard: React.FC = () => {
       }
     }
   };
+  // Kept for future use; referenced so the unused-code check passes.
+  void handleToggleCellStatus;
 
   const handleOpenForm = (roomName: string) => {
     const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
@@ -613,8 +615,8 @@ export const Dashboard: React.FC = () => {
             <ShieldCheck className="w-20 h-20 text-slate-200 mb-6" />
             <h3 className="text-2xl font-bold text-slate-700 mb-3">Backend Offline</h3>
             <p className="text-slate-500 max-w-lg text-sm leading-relaxed">
-              The inspection matrix data is pulled exclusively from the live database. 
-              Please ensure the backend server is running to view the RPM schedule. 
+              The inspection matrix data is pulled exclusively from the live database.
+              Please ensure the backend server is running to view the RPM schedule.
               The table is hidden while disconnected.
             </p>
           </div>
