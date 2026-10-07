@@ -1,4 +1,4 @@
-export type UserRole = 'inspector' | 'supervisor' | 'admin';
+export type UserRole = 'rpm' | 'inspector' | 'admin' | 'supervisor';
 
 export interface User {
   id: number;
@@ -54,7 +54,8 @@ export interface InspectionItem {
   inspection_id: number;
   checklist_item_id: number;
   result: InspectionItemResult | null;
-  remark: string | null;
+  remark: string | null; // RPM Remark
+  inspector_remark?: string | null; // Inspector Remark
   photo_url: string | null;
   checklist_item?: ChecklistItem;
 }
@@ -72,6 +73,8 @@ export interface Inspection {
   header_values: Record<string, any>;
   overall_remark?: string | null;
   signature_url?: string | null;
+  inspector_remark?: string | null;
+  inspected_by_signature_url?: string | null;
   verified_by_id?: number | null;
   verified_at?: string | null;
   pdf_url?: string | null;

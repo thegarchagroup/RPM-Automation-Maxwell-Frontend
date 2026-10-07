@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ClipboardCheck, Hotel, LogOut, ShieldCheck, UserCheck, RotateCcw } from 'lucide-react';
+import { ClipboardCheck, Hotel, LogOut, ShieldCheck, UserCheck, RotateCcw, Users } from 'lucide-react';
+import { UserManagementModal } from './UserManagementModal';
 
 interface NavbarProps {
   onResetForm?: () => void;
@@ -16,6 +17,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
     navigate('/login');
   };
 
+  const [showUserModal, setShowUserModal] = React.useState(false);
+
   const getRoleBadge = () => {
     if (!user) return null;
     switch (user.role) {
@@ -25,16 +28,17 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
             <ShieldCheck className="w-3 h-3" /> Admin
           </span>
         );
-      case 'supervisor':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-            <UserCheck className="w-3 h-3" /> Supervisor
-          </span>
-        );
-      default:
+      case 'inspector':
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200">
             <ClipboardCheck className="w-3 h-3" /> Inspector
+          </span>
+        );
+      case 'rpm':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+            <UserCheck className="w-3 h-3" /> RPM User
           </span>
         );
     }
@@ -51,7 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
             </div>
             <div>
               <div className="font-brand font-bold text-lg text-slate-900 tracking-wider">
-                MAXWELL
+                RPM
               </div>
               <div className="text-[10px] font-medium uppercase tracking-widest text-slate-500">
                 Room Preventive Maintenance
@@ -100,6 +104,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
               </button>
             )}
 
+            {user?.role === 'admin' && (
+              <button
+                type="button"
+                onClick={() => setShowUserModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 transition cursor-pointer shadow-sm"
+                title="Manage Users (Admin)"
+              >
+                <Users className="w-3.5 h-3.5 text-purple-600" />
+                <span>Users</span>
+              </button>
+            )}
+
             {user && (
               <div className="flex items-center gap-3">
                 <div className="hidden sm:flex flex-col items-end text-right">
@@ -120,6 +136,12 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
           </div>
         </div>
       </div>
+
+      {/* Admin User Management Modal */}
+      <UserManagementModal
+        isOpen={showUserModal}
+        onClose={() => setShowUserModal(false)}
+      />
     </header>
   );
 };

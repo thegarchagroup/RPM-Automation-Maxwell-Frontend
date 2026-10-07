@@ -9,6 +9,7 @@ export interface RpmRecord {
   category: string;
   room_or_area: string;
   eng_date: string | null;
+  rpm_date?: string | null;
   ac_servicing: string | null;
   housekeeping: string | null;
   inspection_status: string; // "Done" | "Pending" | "In Progress"
@@ -91,6 +92,7 @@ export const api = {
 
   // Filterable list of RPM records
   async getRpmRecords(filters?: {
+    property_name?: string;
     floor?: string;
     category?: string;
     status?: string;
@@ -99,6 +101,7 @@ export const api = {
     quarter?: string;
   }): Promise<RpmRecord[]> {
     const query = new URLSearchParams();
+    if (filters?.property_name && filters.property_name !== 'all') query.append('property_name', filters.property_name);
     if (filters?.floor && filters.floor !== 'all') query.append('floor', filters.floor);
     if (filters?.category && filters.category !== 'all') query.append('category', filters.category);
     if (filters?.status && filters.status !== 'all') query.append('status', filters.status);
@@ -146,11 +149,15 @@ export const api = {
     room_number: string;
     room_type: string;
     inspection_date: string;
+    property_name?: string;
+    quarter?: string;
     status: string;
     maintenance_carried_by?: string;
     inspected_by?: string;
     signature_url?: string | null;
+    inspected_by_signature_url?: string | null;
     overall_remark?: string;
+    inspector_remark?: string;
     items: Array<{ checklist_item_id: number; result: string; remark?: string | null }>;
   }): Promise<any> {
     const res = await fetch(`${API_BASE}/inspections/`, {
@@ -160,6 +167,104 @@ export const api = {
     });
     if (!res.ok) {
       throw new Error(`Failed to submit inspection to backend (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Update inspection report (Inspector verification or Admin edits)
+  async updateInspection(
+    id: number,
+    data: {
+      room_number?: string;
+      room_type?: string;
+      inspection_date?: string;
+      property_name?: string;
+      quarter?: string;
+      status?: string;
+      maintenance_carried_by?: string;
+      inspected_by?: string;
+      signature_url?: string | null;
+      inspected_by_signature_url?: string | null;
+      overall_remark?: string;
+      inspector_remark?: string;
+      items?: Array<{ checklist_item_id: number; result: string; remark?: string | null }>;
+    }
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/inspections/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to update inspection (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // List inspections
+  async getInspections(filters?: {
+    room_number?: string;
+    property_name?: string;
+    quarter?: string;
+    status?: string;
+  }): Promise<any[]> {
+    const query = new URLSearchParams();
+    if (filters?.room_number) query.append('room_number', filters.room_number);
+    if (filters?.property_name) query.append('property_name', filters.property_name);
+    if (filters?.quarter) query.append('quarter', filters.quarter);
+    if (filters?.status) query.append('status', filters.status);
+
+    const res = await fetch(`${API_BASE}/inspections/?${query.toString()}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch inspections (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Get single inspection by id
+  async getInspection(id: number): Promise<any> {
+    const res = await fetch(`${API_BASE}/inspections/${id}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch inspection (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Admin User Management: List users
+  async getUsers(): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/auth/users`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch users (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Admin User Management: Create new user
+  async createUser(data: {
+    email: string;
+    full_name: string;
+    role: string;
+    password?: string;
+    is_active?: boolean;
+  }): Promise<any> {
+    const res = await fetch(`${API_BASE}/auth/users`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        ...data,
+        password: data.password || 'password123',
+        is_active: data.is_active !== undefined ? data.is_active : true,
+      }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to create user (${res.status})`);
     }
     return res.json();
   },
@@ -231,12 +336,14 @@ export const api = {
     inspection_date: string;
     year: number;
     quarter: string;
+    document_type?: string;
   }): Promise<{ success: boolean; download_url: string; filename: string; path: string }> {
     const query = new URLSearchParams();
     query.append('room_number', params.room_number);
     query.append('inspection_date', params.inspection_date);
     query.append('year', String(params.year));
     query.append('quarter', params.quarter);
+    if (params.document_type) query.append('document_type', params.document_type);
 
     const res = await fetch(`${API_BASE}/dropbox/download-link?${query.toString()}`, {
       headers: getHeaders(),

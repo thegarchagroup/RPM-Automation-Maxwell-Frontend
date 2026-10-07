@@ -54,10 +54,10 @@ export const Login: React.FC = () => {
           </div>
         </div>
         <h2 className="mt-5 text-center text-3xl font-bold font-brand tracking-wider text-white">
-          THE MAXWELL
+          RPM
         </h2>
         <p className="mt-1 text-center text-xs font-semibold tracking-widest uppercase text-amber-400/90">
-          Room Preventive Maintenance Inspection System
+          Room Preventive Maintenance System
         </p>
       </div>
 
@@ -124,6 +124,20 @@ export const Login: React.FC = () => {
             <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
+                onClick={() => handleQuickLogin('rpm@maxwell.com')}
+                className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-amber-400" />
+                  <span>RPM Technician</span>
+                </div>
+                <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/60">
+                  RPM User
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleQuickLogin('inspector@maxwell.com')}
                 className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
               >
@@ -133,20 +147,6 @@ export const Login: React.FC = () => {
                 </div>
                 <span className="text-[10px] uppercase font-bold text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800/60">
                   Inspector
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('supervisor@maxwell.com')}
-                className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
-                  <span>Sarah Lee</span>
-                </div>
-                <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/60">
-                  Supervisor
                 </span>
               </button>
 

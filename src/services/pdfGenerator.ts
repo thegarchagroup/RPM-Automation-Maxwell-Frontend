@@ -3,6 +3,9 @@ import autoTable from 'jspdf-autotable';
 import type { Section, InspectionItem } from '../types';
 
 export interface GeneratePdfOptions {
+  documentType?: 'RPM' | 'Inspection';
+  orientation?: 'landscape' | 'portrait';
+  propertyName?: string;
   roomNumber: string;
   roomType: string;
   inspectionDate: string;
@@ -11,6 +14,7 @@ export interface GeneratePdfOptions {
   sections: Section[];
   itemsMap: Record<number, InspectionItem>;
   overallRemark: string;
+  inspectorRemark?: string;
   maintenanceCarriedBy?: string;
   signatureUrl: string | null;
   inspectedByName?: string;
@@ -24,6 +28,9 @@ export interface GeneratePdfOptions {
 
 export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF; filename: string } {
   const {
+    documentType,
+    orientation,
+    propertyName,
     roomNumber,
     roomType,
     inspectionDate,
@@ -32,6 +39,7 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     sections,
     itemsMap,
     overallRemark,
+    inspectorRemark,
     maintenanceCarriedBy,
     inspectorName,
     signatureUrl,
@@ -42,13 +50,17 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     verifiedAt,
   } = options;
 
+  const currentProperty = propertyName || 'Maxwell';
   const maintenancePerson = maintenanceCarriedBy || inspectorName || 'Maintenance Staff';
   const inspectorPerson = inspectedByName || verifiedByName || 'Not Specified';
   const officialInspectDate = inspectedAt || verifiedAt || inspectionDate;
 
-  // Initialize A4 portrait document (210mm x 297mm)
+  // Inspection PDF is landscape by default to accommodate both RPM and Inspector remarks cleanly
+  const isLandscape = orientation ? orientation === 'landscape' : documentType === 'Inspection';
+
+  // Initialize A4 document (landscape 297mm x 210mm or portrait 210mm x 297mm)
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation: isLandscape ? 'landscape' : 'portrait',
     unit: 'mm',
     format: 'a4',
   });
@@ -67,12 +79,15 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
   doc.setTextColor(251, 191, 36); // amber-400
-  doc.text('THE MAXWELL - ROOM PREVENTIVE MAINTENANCE', pageWidth / 2, currentY + 7.5, { align: 'center' });
+  doc.text(`${currentProperty.toUpperCase()} - ROOM PREVENTIVE MAINTENANCE`, pageWidth / 2, currentY + 7.5, { align: 'center' });
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(226, 232, 240); // slate-200
-  doc.text('ROOM PREVENTIVE MAINTENANCE INSPECTION REPORT', pageWidth / 2, currentY + 13, { align: 'center' });
+  const subTitle = isLandscape
+    ? 'ROOM PREVENTIVE MAINTENANCE & INSPECTION VERIFICATION REPORT (DUAL REMARKS)'
+    : 'ROOM PREVENTIVE MAINTENANCE INSPECTION REPORT';
+  doc.text(subTitle, pageWidth / 2, currentY + 13, { align: 'center' });
 
   currentY += 22;
 
@@ -102,12 +117,19 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
       lineColor: [203, 213, 225],
       lineWidth: 0.2,
     },
-    columnStyles: {
-      0: { cellWidth: 32 },
-      1: { cellWidth: 61 },
-      2: { cellWidth: 32 },
-      3: { cellWidth: 61 },
-    },
+    columnStyles: isLandscape
+      ? {
+          0: { cellWidth: 35 },
+          1: { cellWidth: (contentWidth - 70) / 2 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: (contentWidth - 70) / 2 },
+        }
+      : {
+          0: { cellWidth: 32 },
+          1: { cellWidth: 61 },
+          2: { cellWidth: 32 },
+          3: { cellWidth: 61 },
+        },
   });
 
   currentY = (doc as any).lastAutoTable.finalY + 4;
@@ -163,7 +185,8 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     section.items.forEach((item) => {
       const itemRecord = itemsMap[item.id];
       const result = itemRecord?.result;
-      const remark = itemRecord?.remark || '';
+      const rpmRemark = itemRecord?.remark || '';
+      const inspRemark = itemRecord?.inspector_remark || '';
 
       let statusText = '—';
       let statusStyle: any = { textColor: [148, 163, 184], fontStyle: 'normal', halign: 'center' };
@@ -179,15 +202,37 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
         statusStyle = { textColor: [100, 116, 139], fontStyle: 'normal', halign: 'center', fillColor: [248, 250, 252] };
       }
 
-      tableBody.push([
-        { content: item.item_no, styles: { halign: 'center', fontStyle: 'bold', textColor: [71, 85, 105] } },
-        { content: item.description, styles: { textColor: [15, 23, 42] } },
-        { content: statusText, styles: statusStyle },
-        {
-          content: remark,
-          styles: { textColor: result === 'fail' ? [185, 28, 28] : [71, 85, 105], fontStyle: result === 'fail' ? 'bold' : 'normal' },
-        },
-      ]);
+      if (isLandscape) {
+        tableBody.push([
+          { content: item.item_no, styles: { halign: 'center', fontStyle: 'bold', textColor: [71, 85, 105] } },
+          { content: item.description, styles: { textColor: [15, 23, 42] } },
+          { content: statusText, styles: statusStyle },
+          {
+            content: rpmRemark || '—',
+            styles: {
+              textColor: result === 'fail' ? [185, 28, 28] : (rpmRemark ? [30, 41, 59] : [148, 163, 184]),
+              fontStyle: result === 'fail' && rpmRemark ? 'bold' : 'normal',
+            },
+          },
+          {
+            content: inspRemark || '—',
+            styles: {
+              textColor: inspRemark ? [30, 64, 175] : [148, 163, 184],
+              fontStyle: inspRemark ? 'bold' : 'normal',
+            },
+          },
+        ]);
+      } else {
+        tableBody.push([
+          { content: item.item_no, styles: { halign: 'center', fontStyle: 'bold', textColor: [71, 85, 105] } },
+          { content: item.description, styles: { textColor: [15, 23, 42] } },
+          { content: statusText, styles: statusStyle },
+          {
+            content: rpmRemark || '—',
+            styles: { textColor: result === 'fail' ? [185, 28, 28] : [71, 85, 105], fontStyle: result === 'fail' ? 'bold' : 'normal' },
+          },
+        ]);
+      }
     });
 
     if (currentY > pageHeight - 35) {
@@ -199,27 +244,50 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
       startY: currentY,
       margin: { left: margin, right: margin },
       theme: 'grid',
-      head: [
-        [
-          {
-            content: `${section.code}. ${section.title}`,
-            colSpan: 4,
-            styles: {
-              fillColor: [30, 41, 59], // slate-800
-              textColor: [255, 255, 255],
-              fontStyle: 'bold',
-              fontSize: 8.5,
-              cellPadding: 2,
-            },
-          },
-        ],
-        [
-          { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-          { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-          { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-          { content: 'Remarks / Defect Details', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-        ],
-      ],
+      head: isLandscape
+        ? [
+            [
+              {
+                content: `${section.code}. ${section.title}`,
+                colSpan: 5,
+                styles: {
+                  fillColor: [30, 41, 59], // slate-800
+                  textColor: [255, 255, 255],
+                  fontStyle: 'bold',
+                  fontSize: 8.5,
+                  cellPadding: 2,
+                },
+              },
+            ],
+            [
+              { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+              { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+              { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+              { content: 'RPM Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+              { content: 'Inspector Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+            ],
+          ]
+        : [
+            [
+              {
+                content: `${section.code}. ${section.title}`,
+                colSpan: 4,
+                styles: {
+                  fillColor: [30, 41, 59],
+                  textColor: [255, 255, 255],
+                  fontStyle: 'bold',
+                  fontSize: 8.5,
+                  cellPadding: 2,
+                },
+              },
+            ],
+            [
+              { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+              { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+              { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+              { content: 'Remarks / Defect Details', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+            ],
+          ],
       body: tableBody,
       styles: {
         fontSize: 7.5,
@@ -228,12 +296,20 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
         lineWidth: 0.15,
         overflow: 'linebreak',
       },
-      columnStyles: {
-        0: { cellWidth: 10 },
-        1: { cellWidth: 95 },
-        2: { cellWidth: 20 },
-        3: { cellWidth: 61 },
-      },
+      columnStyles: isLandscape
+        ? {
+            0: { cellWidth: 10 },
+            1: { cellWidth: 105 },
+            2: { cellWidth: 24 },
+            3: { cellWidth: 67 },
+            4: { cellWidth: 67 },
+          }
+        : {
+            0: { cellWidth: 10 },
+            1: { cellWidth: 95 },
+            2: { cellWidth: 20 },
+            3: { cellWidth: 61 },
+          },
       pageBreak: 'auto',
     });
 
@@ -246,28 +322,67 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     currentY = margin;
   }
 
-  autoTable(doc, {
-    startY: currentY,
-    margin: { left: margin, right: margin },
-    theme: 'grid',
-    head: [
-      [
-        {
-          content: 'Overall Remarks & Observations',
-          styles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', fontSize: 8.5 },
-        },
+  const isInspectionDoc = documentType === 'Inspection' || Boolean(inspectorRemark);
+
+  if (isInspectionDoc) {
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: margin, right: margin },
+      theme: 'grid',
+      head: [
+        [
+          {
+            content: 'RPM / Maintenance Remarks',
+            styles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', fontSize: 8 },
+          },
+          {
+            content: 'Inspector Remarks & Verification Notes',
+            styles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', fontSize: 8 },
+          },
+        ],
       ],
-    ],
-    body: [
-      [
-        {
-          content: overallRemark || 'No additional remarks recorded.',
-          styles: { minCellHeight: 12, fontSize: 8, textColor: [30, 41, 59] },
-        },
+      body: [
+        [
+          {
+            content: overallRemark || 'No additional remarks recorded by RPM technician.',
+            styles: { minCellHeight: 12, fontSize: 8, textColor: [30, 41, 59], cellPadding: 3 },
+          },
+          {
+            content: inspectorRemark || 'Inspection complete and verified. No defect escalation.',
+            styles: { minCellHeight: 12, fontSize: 8, textColor: [30, 41, 59], cellPadding: 3 },
+          },
+        ],
       ],
-    ],
-    styles: { lineColor: [203, 213, 225], lineWidth: 0.2 },
-  });
+      styles: { lineColor: [203, 213, 225], lineWidth: 0.2 },
+      columnStyles: {
+        0: { cellWidth: contentWidth / 2 },
+        1: { cellWidth: contentWidth / 2 },
+      },
+    });
+  } else {
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: margin, right: margin },
+      theme: 'grid',
+      head: [
+        [
+          {
+            content: 'Overall Remarks & Observations (RPM Technician)',
+            styles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', fontSize: 8.5 },
+          },
+        ],
+      ],
+      body: [
+        [
+          {
+            content: overallRemark || 'No additional remarks recorded.',
+            styles: { minCellHeight: 12, fontSize: 8, textColor: [30, 41, 59] },
+          },
+        ],
+      ],
+      styles: { lineColor: [203, 213, 225], lineWidth: 0.2 },
+    });
+  }
 
   currentY = (doc as any).lastAutoTable.finalY + 4;
 
@@ -310,11 +425,17 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
       lineColor: [203, 213, 225],
       lineWidth: 0.2,
     },
-    columnStyles: {
-      0: { cellWidth: 55 },
-      1: { cellWidth: 76 },
-      2: { cellWidth: 55 },
-    },
+    columnStyles: isLandscape
+      ? {
+          0: { cellWidth: 65 },
+          1: { cellWidth: (contentWidth - 65) / 2 },
+          2: { cellWidth: (contentWidth - 65) / 2 },
+        }
+      : {
+          0: { cellWidth: 55 },
+          1: { cellWidth: 76 },
+          2: { cellWidth: 55 },
+        },
     didDrawCell: (data) => {
       if (data.section === 'body') {
         const cell = data.cell;
@@ -393,14 +514,17 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     doc.setFontSize(7);
     doc.setTextColor(148, 163, 184); // slate-400
     doc.text(
-      `Maxwell Hotel & Suites • Room Preventive Maintenance Inspection • Room ${roomNumber}`,
+      `${currentProperty} • Room Preventive Maintenance Inspection • Room ${roomNumber}`,
       margin,
       pageHeight - 6
     );
     doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 6, { align: 'right' });
   }
 
-  const safeFilename = `Maxwell_Inspection_Room_${roomNumber.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+  const cleanRoom = roomNumber.replace(/Room\s*/i, '').trim().replace(/[^a-zA-Z0-9]/g, '');
+  const prefix = documentType === 'Inspection' ? 'Inspection' : 'RPM';
+  const cleanDate = (inspectionDate || new Date().toISOString().slice(0, 10)).trim().replace(/[^a-zA-Z0-9]/g, '_');
+  const safeFilename = `${prefix}_${cleanRoom}_${cleanDate}.pdf`;
   return { doc, filename: safeFilename };
 }
 

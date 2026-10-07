@@ -15,16 +15,16 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const DEFAULT_USERS: User[] = [
   {
     id: 1,
-    email: 'inspector@maxwell.com',
-    full_name: 'John Tan (Inspector)',
-    role: 'inspector',
+    email: 'rpm@maxwell.com',
+    full_name: 'RPM Technician',
+    role: 'rpm',
     is_active: true,
   },
   {
     id: 2,
-    email: 'supervisor@maxwell.com',
-    full_name: 'Sarah Lee (Supervisor)',
-    role: 'supervisor',
+    email: 'inspector@maxwell.com',
+    full_name: 'John Tan (Inspector)',
+    role: 'inspector',
     is_active: true,
   },
   {

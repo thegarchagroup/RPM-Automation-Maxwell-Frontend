@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { api, type RpmRecord } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 import {
   FileSpreadsheet,
@@ -16,16 +17,21 @@ import {
   Building2,
   ShieldCheck,
   FileDown,
+  ClipboardCheck,
+  Edit3,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Bell,
 } from 'lucide-react';
 
 // Static template matrix containing exact room layout and initial fallback
 import { RAW_CSV_ROWS, type RawCell } from '../data/rpmCsvData';
+import { MAXWELL_SECTIONS } from '../data/templateData';
 
 interface TableCell {
   room: string;
-  eng: string;
-  ac: string;
-  housekeeping: string;
+  rpm: string;
   inspection: string;
   status: string;
   isPublicHeader?: boolean;
@@ -51,9 +57,13 @@ const getCurrentQuarter = (): { year: number; quarter: string } => {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const isInspector = user?.role === 'inspector';
 
   // Filter States — default to the current calendar quarter
   const { year: currentYear, quarter: currentQuarter } = getCurrentQuarter();
+  const [selectedProperty, setSelectedProperty] = useState<string>('Maxwell');
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedQuarter, setSelectedQuarter] = useState<string>(currentQuarter);
   const [statusFilter, setStatusFilter] = useState<'all' | 'Done' | 'Pending'>('all');
@@ -64,11 +74,17 @@ export const Dashboard: React.FC = () => {
   const [isBackendConnected, setIsBackendConnected] = useState<boolean | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
+  // Defect notification state for Inspector & Admin
+  const [defectiveInspections, setDefectiveInspections] = useState<any[]>([]);
+  const [isDefectBannerDismissed, setIsDefectBannerDismissed] = useState<boolean>(false);
+  const [isDefectListExpanded, setIsDefectListExpanded] = useState<boolean>(false);
+
   // Load records from backend API
   const loadData = async () => {
     setIsLoading(true);
     try {
       const data = await api.getRpmRecords({
+        property_name: selectedProperty,
         year: selectedYear,
         quarter: selectedQuarter,
         status: statusFilter !== 'all' ? statusFilter : undefined,
@@ -77,6 +93,24 @@ export const Dashboard: React.FC = () => {
       setIsBackendConnected(true);
       if (data) {
         setRecords(data);
+      }
+
+      // Fetch defects for Inspector & Admin notification showcase
+      if (isAdmin || isInspector) {
+        try {
+          const allInspections = await api.getInspections({
+            property_name: selectedProperty,
+          });
+          const flagged = (allInspections || []).filter((insp: any) => {
+            return (
+              Array.isArray(insp.items) &&
+              insp.items.some((it: any) => it.result?.toLowerCase() === 'fail')
+            );
+          });
+          setDefectiveInspections(flagged);
+        } catch (e) {
+          console.warn('Inspection defects fetch note:', e);
+        }
       }
     } catch (err) {
       setIsBackendConnected(false);
@@ -89,7 +123,7 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [selectedYear, selectedQuarter, statusFilter, searchQuery]);
+  }, [selectedProperty, selectedYear, selectedQuarter, statusFilter, searchQuery, isAdmin, isInspector]);
 
   // Toast notification helper
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
@@ -116,21 +150,28 @@ export const Dashboard: React.FC = () => {
   const tableRows: TableRow[] = useMemo(() => {
     return RAW_CSV_ROWS.map((row) => {
       const findUpdated = (roomName: string, defaultCell: RawCell): TableCell => {
-        if (!roomName || defaultCell.isPublicHeader) return { ...defaultCell, status: '' };
+        if (!roomName || defaultCell.isPublicHeader) {
+          return { room: defaultCell.room, rpm: '', inspection: '', status: '', isPublicHeader: defaultCell.isPublicHeader };
+        }
 
-        // Find matching record from database
-        const matched = records.find(
-          (r) => r.room_or_area.toLowerCase().trim() === roomName.toLowerCase().trim()
-        );
+        // Find matching record from database (case-insensitive and trimming 'Room')
+        const cleanDefault = roomName.toLowerCase().replace(/room\s*/i, '').trim();
+        const matched = records.find((r) => {
+          const cleanR = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
+          return cleanR === cleanDefault || r.room_or_area.toLowerCase().trim() === roomName.toLowerCase().trim();
+        });
 
         if (matched) {
+          const isDone = matched.inspection_status === 'Done';
+          const rpmDate = matched.rpm_date || matched.eng_date || '';
+          const inspectionDate = matched.inspection_date || '';
+          const status = isDone ? 'Done' : (rpmDate ? 'Pending' : (matched.inspection_status || ''));
+
           return {
             room: matched.room_or_area,
-            eng: matched.eng_date || '',
-            ac: matched.ac_servicing || '',
-            housekeeping: matched.housekeeping || '',
-            inspection: matched.inspection_date || '',
-            status: matched.inspection_status === 'Done' ? 'Done' : 'Pending',
+            rpm: rpmDate,
+            inspection: inspectionDate,
+            status: status,
             isPublicHeader: defaultCell.isPublicHeader,
             recordId: matched.id,
           };
@@ -138,9 +179,7 @@ export const Dashboard: React.FC = () => {
 
         return {
           room: defaultCell.room,
-          eng: '',
-          ac: '',
-          housekeeping: '',
+          rpm: '',
           inspection: '',
           status: '',
           isPublicHeader: defaultCell.isPublicHeader,
@@ -171,9 +210,10 @@ export const Dashboard: React.FC = () => {
     } else {
       try {
         await api.createRpmRecord({
+          property_name: selectedProperty,
           room_or_area: cell.room,
           category: 'guest_room',
-          floor: `Floor ${cell.room.replace(/[^0-9]/g, '').charAt(0) || '1'}`, // Basic heuristic
+          floor: `Level ${cell.room.replace(/[^0-9]/g, '').charAt(0) || '1'}`, // Level heuristic
           quarter: selectedQuarter,
           year: selectedYear,
           inspection_status: newStatus,
@@ -198,9 +238,47 @@ export const Dashboard: React.FC = () => {
   // Kept for future use; referenced so the unused-code check passes.
   void handleToggleCellStatus;
 
+  const blockColSpan = isAdmin ? 5 : 4;
+
+  // Checklist item description lookup
+  const itemDescMap = useMemo(() => {
+    const map: Record<number, string> = {};
+    MAXWELL_SECTIONS.forEach((s) => {
+      s.items.forEach((it) => {
+        map[it.id] = it.description;
+      });
+    });
+    return map;
+  }, []);
+
+  // Room defects map for badge display in table
+  const roomDefectsMap = useMemo(() => {
+    const map: Record<string, { count: number; items: any[]; status: string; inspectionId: number; technician?: string; date?: string }> = {};
+    defectiveInspections.forEach((insp) => {
+      const clean = (insp.room_number || '').toLowerCase().replace(/room\s*/i, '').trim();
+      const failedItems = (insp.items || []).filter((it: any) => it.result?.toLowerCase() === 'fail');
+      if (failedItems.length > 0) {
+        map[clean] = {
+          count: failedItems.length,
+          items: failedItems,
+          status: insp.status,
+          inspectionId: insp.id,
+          technician: insp.maintenance_carried_by,
+          date: insp.inspection_date,
+        };
+      }
+    });
+    return map;
+  }, [defectiveInspections]);
+
   const handleOpenForm = (roomName: string) => {
     const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
-    navigate(`/form?room=${encodeURIComponent(cleanRoom)}`);
+    navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}`);
+  };
+
+  const handleAdminEdit = (roomName: string) => {
+    const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
+    navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}&edit=true`);
   };
 
   // Search match helper
@@ -209,51 +287,43 @@ export const Dashboard: React.FC = () => {
     return text.toLowerCase().includes(searchQuery.toLowerCase().trim());
   };
 
-  // 1. Download as CSV
+  // 1. Download as CSV (Room No, RPM, Inspection, Status)
   const handleDownloadCSV = () => {
     const headers = [
-      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [selectedProperty.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
       [
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
       ],
       [
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
       ],
     ];
 
     const dataRows = tableRows.map((r) => [
       r.block1.isPublicHeader ? 'Public Area' : r.block1.room,
-      r.block1.eng,
-      r.block1.ac,
-      r.block1.housekeeping,
+      r.block1.rpm,
       r.block1.inspection,
       r.block1.status,
 
       r.block2.room,
-      r.block2.eng,
-      r.block2.ac,
-      r.block2.housekeeping,
+      r.block2.rpm,
       r.block2.inspection,
       r.block2.status,
 
       r.block3.room,
-      r.block3.eng,
-      r.block3.ac,
-      r.block3.housekeeping,
+      r.block3.rpm,
       r.block3.inspection,
       r.block3.status,
 
       r.block4.room,
-      r.block4.eng,
-      r.block4.ac,
-      r.block4.housekeeping,
+      r.block4.rpm,
       r.block4.inspection,
       r.block4.status,
     ]);
@@ -277,7 +347,7 @@ export const Dashboard: React.FC = () => {
     link.href = url;
     link.setAttribute(
       'download',
-      `Maxwell_Reserve_RPM_${selectedYear}_${quarterHeaderTitle.replace(/[^a-zA-Z0-9]/g, '_')}.csv`
+      `${selectedProperty.replace(/[^a-zA-Z0-9]/g, '_')}_RPM_${selectedYear}_${quarterHeaderTitle.replace(/[^a-zA-Z0-9]/g, '_')}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -288,49 +358,41 @@ export const Dashboard: React.FC = () => {
   // 2. Download as XLSX (Excel spreadsheet)
   const handleDownloadXLSX = () => {
     const aoa: any[][] = [
-      ['MAXWELL RESERVE', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [selectedProperty.toUpperCase(), '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [`RPM ${selectedYear}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
       [
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
-        'ROOM', quarterHeaderTitle, '', '', '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
+        'ROOM NO', quarterHeaderTitle, '', '',
       ],
       [
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
-        '', 'ENG', 'AC Servicing', 'Housekeeping', 'INSPECTION', 'STATUS',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
+        'Room No', 'RPM', 'Inspection', 'Status',
       ],
     ];
 
     tableRows.forEach((r) => {
       aoa.push([
         r.block1.isPublicHeader ? 'Public Area' : r.block1.room,
-        r.block1.eng,
-        r.block1.ac,
-        r.block1.housekeeping,
+        r.block1.rpm,
         r.block1.inspection,
         r.block1.status,
 
         r.block2.room,
-        r.block2.eng,
-        r.block2.ac,
-        r.block2.housekeeping,
+        r.block2.rpm,
         r.block2.inspection,
         r.block2.status,
 
         r.block3.room,
-        r.block3.eng,
-        r.block3.ac,
-        r.block3.housekeeping,
+        r.block3.rpm,
         r.block3.inspection,
         r.block3.status,
 
         r.block4.room,
-        r.block4.eng,
-        r.block4.ac,
-        r.block4.housekeeping,
+        r.block4.rpm,
         r.block4.inspection,
         r.block4.status,
       ]);
@@ -339,42 +401,56 @@ export const Dashboard: React.FC = () => {
     const worksheet = XLSX.utils.aoa_to_sheet(aoa);
 
     worksheet['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 23 } }, // MAXWELL RESERVE
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 23 } }, // RPM {year}
-      { s: { r: 2, c: 1 }, e: { r: 2, c: 5 } }, // Block 1 Quarter
-      { s: { r: 2, c: 7 }, e: { r: 2, c: 11 } }, // Block 2 Quarter
-      { s: { r: 2, c: 13 }, e: { r: 2, c: 17 } }, // Block 3 Quarter
-      { s: { r: 2, c: 19 }, e: { r: 2, c: 23 } }, // Block 4 Quarter
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } }, // Property Name Header
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } }, // RPM {year}
+      { s: { r: 2, c: 1 }, e: { r: 2, c: 3 } }, // Block 1 Quarter
+      { s: { r: 2, c: 5 }, e: { r: 2, c: 7 } }, // Block 2 Quarter
+      { s: { r: 2, c: 9 }, e: { r: 2, c: 11 } }, // Block 3 Quarter
+      { s: { r: 2, c: 13 }, e: { r: 2, c: 15 } }, // Block 4 Quarter
     ];
 
     tableRows.forEach((r, idx) => {
       if (r.block1.isPublicHeader) {
         worksheet['!merges']?.push({
           s: { r: idx + 4, c: 0 },
-          e: { r: idx + 4, c: 5 },
+          e: { r: idx + 4, c: 3 },
         });
       }
     });
 
     worksheet['!cols'] = [
-      { wch: 14 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
-      { wch: 14 }, { wch: 13 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 10 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
     ];
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'RPM Schedule');
 
-    const fileName = `Maxwell_Reserve_RPM_${selectedYear}_${quarterHeaderTitle.replace(/[^a-zA-Z0-9]/g, '_')}.xlsx`;
+    const fileName = `${selectedProperty.replace(/[^a-zA-Z0-9]/g, '_')}_RPM_${selectedYear}_${quarterHeaderTitle.replace(/[^a-zA-Z0-9]/g, '_')}.xlsx`;
     XLSX.writeFile(workbook, fileName);
     showToast('Excel spreadsheet (.xlsx) downloaded successfully!');
   };
 
-  // Helper renderer for modern status badge (display-only)
+  // Helper renderer for modern status badge
   const renderInspectionBadge = (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader || !cell.status) return null;
     const isDone = cell.status === 'Done';
+
+    if (user?.role === 'inspector' && !isDone) {
+      return (
+        <button
+          type="button"
+          onClick={() => handleOpenForm(cell.room)}
+          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-300 transition cursor-pointer shadow-sm animate-pulse"
+          title={`Inspect ${cell.room}`}
+        >
+          <ClipboardCheck className="w-3 h-3 text-blue-700" />
+          <span>Inspect</span>
+        </button>
+      );
+    }
 
     return (
       <span
@@ -396,11 +472,29 @@ export const Dashboard: React.FC = () => {
     );
   };
 
+  // Helper renderer for Admin Show button (opens form in edit mode)
+  const renderShowButton = (cell: TableCell) => {
+    if (!cell.room || cell.isPublicHeader) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => handleAdminEdit(cell.room)}
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition cursor-pointer shadow-sm active:scale-95"
+        title={`Open Room ${cell.room} in edit mode`}
+      >
+        <Edit3 className="w-3 h-3 text-purple-700" />
+        <span>Show</span>
+      </button>
+    );
+  };
+
   // Helper renderer for room button
   const renderRoomCell = (cell: TableCell) => {
     if (!cell.room) return <span className="text-slate-300">—</span>;
 
     const isMatched = isMatchSearch(cell.room);
+    const cleanRoom = cell.room.toLowerCase().replace(/room\s*/i, '').trim();
+    const defectInfo = (isAdmin || isInspector) ? roomDefectsMap[cleanRoom] : null;
 
     return (
       <button
@@ -411,9 +505,18 @@ export const Dashboard: React.FC = () => {
             ? 'bg-amber-200/90 text-slate-950 ring-2 ring-amber-400'
             : 'text-slate-800 hover:text-blue-600'
         }`}
-        title={`Inspect ${cell.room}`}
+        title={`Inspect ${cell.room}${defectInfo ? ` (${defectInfo.count} defect(s) flagged)` : ''}`}
       >
         <span>{cell.room}</span>
+        {defectInfo && (
+          <span
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-rose-600 text-white shadow-sm ring-1 ring-rose-400 flex-shrink-0"
+            title={`${defectInfo.count} RPM defect(s) reported`}
+          >
+            <AlertTriangle className="w-2.5 h-2.5" />
+            <span>{defectInfo.count}</span>
+          </span>
+        )}
         <ExternalLink className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 transition text-blue-500 flex-shrink-0" />
       </button>
     );
@@ -487,6 +590,23 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-slate-700 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
               <Filter className="w-3.5 h-3.5 text-amber-600" />
               <span>Filters</span>
+            </div>
+
+            {/* Property Selector */}
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="property-select" className="text-xs font-bold text-slate-600">
+                Property:
+              </label>
+              <select
+                id="property-select"
+                value={selectedProperty}
+                onChange={(e) => setSelectedProperty(e.target.value)}
+                className="py-2 px-3 rounded-xl text-xs font-bold bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer shadow-sm transition"
+              >
+                <option value="Maxwell">Maxwell</option>
+                <option value="Serangoon House">Serangoon House</option>
+                <option value="Vagabond Club">Vagabond Club</option>
+              </select>
             </div>
 
             {/* Year Selector */}
@@ -599,7 +719,7 @@ export const Dashboard: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => navigate('/form')}
+              onClick={() => navigate(`/form?property=${encodeURIComponent(selectedProperty)}`)}
               className="py-2.5 px-4 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
               title="Open digital inspection checklist form"
             >
@@ -609,7 +729,148 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Modern 4-Block Floor Grid Interface */}
+        {/* RPM Defect Notification Banner for Inspector & Admin */}
+        {(isAdmin || isInspector) && defectiveInspections.length > 0 && !isDefectBannerDismissed && (
+          <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border-2 border-rose-300 rounded-2xl p-4 sm:p-5 shadow-md space-y-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow flex-shrink-0 animate-bounce">
+                  <AlertTriangle className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-extrabold text-rose-950 uppercase tracking-wide">
+                      RPM Defect Alert: {defectiveInspections.length} Room{defectiveInspections.length > 1 ? 's' : ''} Require Attention
+                    </h4>
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-rose-600 text-white animate-pulse">
+                      Defects Reported
+                    </span>
+                  </div>
+                  <p className="text-xs text-rose-800/90 font-medium mt-0.5">
+                    RPM technician noted maintenance defects in submitted checklist reports. Review defects and verify rectification status.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsDefectListExpanded(!isDefectListExpanded)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/90 hover:bg-white text-slate-800 border border-rose-200 shadow-sm transition cursor-pointer"
+                >
+                  <span>{isDefectListExpanded ? 'Hide Details' : 'View Defect Breakdown'}</span>
+                  {isDefectListExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsDefectBannerDismissed(true)}
+                  className="p-1.5 rounded-xl text-rose-700 hover:bg-rose-200/60 transition cursor-pointer"
+                  title="Dismiss notification banner"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Fast Action Room Badges */}
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-rose-200/60">
+              <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-900 mr-1 flex items-center gap-1">
+                <Bell className="w-3 h-3 text-rose-600" />
+                Flagged Rooms:
+              </span>
+              {defectiveInspections.map((insp) => {
+                const fails = (insp.items || []).filter((it: any) => it.result?.toLowerCase() === 'fail');
+                const isVerified = insp.status === 'verified';
+                return (
+                  <button
+                    key={insp.id}
+                    type="button"
+                    onClick={() => handleOpenForm(insp.room_number)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer border hover:scale-105 active:scale-95 ${
+                      isVerified
+                        ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                        : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-700'
+                    }`}
+                    title={`Open Room ${insp.room_number} form`}
+                  >
+                    <span>Room {insp.room_number}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${isVerified ? 'bg-amber-200 text-amber-900' : 'bg-rose-800 text-rose-100'}`}>
+                      {fails.length} Defect{fails.length > 1 ? 's' : ''}
+                    </span>
+                    <span className="text-[10px] opacity-80 uppercase">
+                      ({isVerified ? 'Verified' : 'Pending Review'})
+                    </span>
+                    <ExternalLink className="w-3 h-3 opacity-70" />
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Collapsible Defect Items Details */}
+            {isDefectListExpanded && (
+              <div className="mt-3 pt-3 border-t border-rose-200/80 bg-white/95 rounded-xl p-3 sm:p-4 shadow-inner space-y-3">
+                <h5 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                  Detailed Defect Breakdown by Room:
+                </h5>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {defectiveInspections.map((insp) => {
+                    const fails = (insp.items || []).filter((it: any) => it.result?.toLowerCase() === 'fail');
+                    return (
+                      <div
+                        key={`detail-${insp.id}`}
+                        className="bg-rose-50/50 rounded-xl p-3 border border-rose-200 space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-extrabold text-slate-900 text-sm">
+                            Room {insp.room_number}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenForm(insp.room_number)}
+                            className="text-[11px] font-bold text-blue-600 hover:underline inline-flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <span>Inspect</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          <span>Tech: <strong className="text-slate-700">{insp.maintenance_carried_by || 'RPM Staff'}</strong></span>
+                          <span className="mx-1.5">•</span>
+                          <span>Date: <strong className="text-slate-700">{insp.inspection_date || '—'}</strong></span>
+                        </div>
+                        <div className="space-y-1.5 pt-1 border-t border-rose-200/60">
+                          {fails.map((f: any, idx: number) => {
+                            const desc = itemDescMap[f.checklist_item_id] || `Checklist Item #${f.checklist_item_id}`;
+                            return (
+                              <div key={idx} className="bg-white rounded-lg p-2 border border-rose-200 text-slate-800">
+                                <div className="font-semibold text-[11px] text-rose-900 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 text-rose-600 flex-shrink-0" />
+                                  <span>{desc}</span>
+                                </div>
+                                {f.remark && (
+                                  <div className="text-[11px] text-slate-600 italic mt-0.5 pl-4">
+                                    "{f.remark}"
+                                  </div>
+                                )}
+                                {f.inspector_remark && (
+                                  <div className="text-[11px] text-blue-700 font-medium mt-0.5 pl-4">
+                                    Inspector: "{f.inspector_remark}"
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Modern 4-Block Level Grid Interface */}
         {isBackendConnected === false ? (
           <div className="bg-white p-16 rounded-3xl border border-slate-200/90 shadow-xl flex flex-col items-center justify-center text-center h-[50vh]">
             <ShieldCheck className="w-20 h-20 text-slate-200 mb-6" />
@@ -624,15 +885,15 @@ export const Dashboard: React.FC = () => {
           <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse min-w-[1360px]">
-              {/* Floor Sector Super-Headers */}
+              {/* Level Sector Super-Headers */}
               <thead>
                 <tr className="bg-slate-900 text-white text-xs font-bold border-b border-slate-800">
                   {/* Block 1 Header */}
-                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-amber-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Floor 1 & Public Areas</span>
+                        <span className="font-extrabold tracking-wide uppercase">Level 1 & Public Areas</span>
                       </div>
                       <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
                         13 Units + Areas
@@ -641,11 +902,11 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 2 Header */}
-                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-blue-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Floor 2</span>
+                        <span className="font-extrabold tracking-wide uppercase">Level 2</span>
                       </div>
                       <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
                         26 Rooms
@@ -654,11 +915,11 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 3 Header */}
-                  <th colSpan={6} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-indigo-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Floor 3</span>
+                        <span className="font-extrabold tracking-wide uppercase">Level 3</span>
                       </div>
                       <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
                         26 Rooms
@@ -667,11 +928,11 @@ export const Dashboard: React.FC = () => {
                   </th>
 
                   {/* Block 4 Header */}
-                  <th colSpan={6} className="py-3 px-4 w-[25%]">
+                  <th colSpan={blockColSpan} className="py-3 px-4 w-[25%]">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-emerald-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Floor 4</span>
+                        <span className="font-extrabold tracking-wide uppercase">Level 4</span>
                       </div>
                       <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
                         14 Rooms
@@ -683,36 +944,32 @@ export const Dashboard: React.FC = () => {
                 {/* Sub-Column Headers */}
                 <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">
                   {/* Block 1 */}
-                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
 
                   {/* Block 2 */}
-                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
 
                   {/* Block 3 */}
-                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r-2 border-slate-300 text-center">Status</th>
+                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
 
                   {/* Block 4 */}
-                  <th className="py-2.5 px-3 w-[5%] border-r border-slate-100">Room</th>
-                  <th className="py-2.5 px-2 w-[4%] border-r border-slate-100">ENG</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">AC Service</th>
-                  <th className="py-2.5 px-2 w-[3%] border-r border-slate-100">HK</th>
-                  <th className="py-2.5 px-2 w-[5%] border-r border-slate-100">Inspection</th>
-                  <th className="py-2.5 px-2 w-[3%] text-center">Status</th>
+                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>Status</th>
+                  {isAdmin && <th className="py-2.5 px-2 text-center">Show</th>}
                 </tr>
               </thead>
 
@@ -724,7 +981,7 @@ export const Dashboard: React.FC = () => {
                       {/* ================= BLOCK 1 ================= */}
                       {row.block1.isPublicHeader ? (
                         <td
-                          colSpan={6}
+                          colSpan={blockColSpan}
                           className="py-2 px-3 bg-gradient-to-r from-amber-50 via-amber-100/50 to-amber-50 border-r-2 border-slate-300 border-y border-amber-200/80"
                         >
                           <div className="flex items-center justify-center gap-2">
@@ -739,23 +996,20 @@ export const Dashboard: React.FC = () => {
                           <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
                             {renderRoomCell(row.block1)}
                           </td>
-                          <td className="py-2 px-2 border-r border-slate-100">
-                            {renderDateBadge(row.block1.eng)}
+                          <td className="py-2 px-2 border-r border-slate-100 text-center">
+                            {renderDateBadge(row.block1.rpm)}
                           </td>
-                          <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-600 truncate max-w-[130px]" title={row.block1.ac}>
-                            {row.block1.ac && row.block1.ac.includes('-')
-                              ? renderDateBadge(row.block1.ac)
-                              : row.block1.ac ? <span className="font-medium text-slate-700">{row.block1.ac}</span> : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
-                            {row.block1.housekeeping || <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="py-2 px-2 border-r border-slate-100">
+                          <td className="py-2 px-2 border-r border-slate-100 text-center">
                             {renderInspectionDate(row.block1)}
                           </td>
-                          <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                          <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
                             {renderInspectionBadge(row.block1)}
                           </td>
+                          {isAdmin && (
+                            <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                              {renderShowButton(row.block1)}
+                            </td>
+                          )}
                         </>
                       )}
 
@@ -763,67 +1017,58 @@ export const Dashboard: React.FC = () => {
                       <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
                         {renderRoomCell(row.block2)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block2.eng)}
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
+                        {renderDateBadge(row.block2.rpm)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-600 truncate max-w-[130px]" title={row.block2.ac}>
-                        {row.block2.ac && row.block2.ac.includes('-')
-                          ? renderDateBadge(row.block2.ac)
-                          : row.block2.ac ? <span className="font-medium text-slate-700">{row.block2.ac}</span> : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
-                        {row.block2.housekeeping || <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
                         {renderInspectionDate(row.block2)}
                       </td>
-                      <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
                         {renderInspectionBadge(row.block2)}
                       </td>
+                      {isAdmin && (
+                        <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                          {renderShowButton(row.block2)}
+                        </td>
+                      )}
 
                       {/* ================= BLOCK 3 ================= */}
                       <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
                         {renderRoomCell(row.block3)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block3.eng)}
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
+                        {renderDateBadge(row.block3.rpm)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-600 truncate max-w-[130px]" title={row.block3.ac}>
-                        {row.block3.ac && row.block3.ac.includes('-')
-                          ? renderDateBadge(row.block3.ac)
-                          : row.block3.ac ? <span className="font-medium text-slate-700">{row.block3.ac}</span> : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
-                        {row.block3.housekeeping || <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
                         {renderInspectionDate(row.block3)}
                       </td>
-                      <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
                         {renderInspectionBadge(row.block3)}
                       </td>
+                      {isAdmin && (
+                        <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                          {renderShowButton(row.block3)}
+                        </td>
+                      )}
 
                       {/* ================= BLOCK 4 ================= */}
                       <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
                         {renderRoomCell(row.block4)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
-                        {renderDateBadge(row.block4.eng)}
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
+                        {renderDateBadge(row.block4.rpm)}
                       </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-600 truncate max-w-[130px]" title={row.block4.ac}>
-                        {row.block4.ac && row.block4.ac.includes('-')
-                          ? renderDateBadge(row.block4.ac)
-                          : row.block4.ac ? <span className="font-medium text-slate-700">{row.block4.ac}</span> : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-[11px] text-slate-500">
-                        {row.block4.housekeeping || <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100">
+                      <td className="py-2 px-2 border-r border-slate-100 text-center">
                         {renderInspectionDate(row.block4)}
                       </td>
-                      <td className="py-2 px-2 text-center">
+                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>
                         {renderInspectionBadge(row.block4)}
                       </td>
+                      {isAdmin && (
+                        <td className="py-2 px-2 text-center">
+                          {renderShowButton(row.block4)}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
