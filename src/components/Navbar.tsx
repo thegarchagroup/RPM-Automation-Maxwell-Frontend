@@ -1,14 +1,16 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ClipboardCheck, Hotel, LogOut, ShieldCheck, UserCheck, RotateCcw, Users } from 'lucide-react';
+import { ClipboardCheck, Hotel, LogOut, ShieldCheck, UserCheck, RotateCcw, Users, Sliders } from 'lucide-react';
 import { UserManagementModal } from './UserManagementModal';
+import { FormStructureModal } from './FormStructureModal';
 
 interface NavbarProps {
   onResetForm?: () => void;
+  onStructureUpdated?: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
+export const Navbar: React.FC<NavbarProps> = ({ onResetForm, onStructureUpdated }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -18,6 +20,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
   };
 
   const [showUserModal, setShowUserModal] = React.useState(false);
+  const [showStructureModal, setShowStructureModal] = React.useState(false);
 
   const getRoleBadge = () => {
     if (!user) return null;
@@ -68,31 +71,31 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
             <button
               type="button"
               onClick={() => navigate('/dashboard')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                window.location.pathname.includes('/dashboard')
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${window.location.pathname.includes('/dashboard')
                   ? 'bg-slate-900 text-white shadow-sm'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
+                }`}
             >
               <span>Dashboard</span>
             </button>
-            <button
-              type="button"
-              onClick={() => navigate('/form')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                window.location.pathname.includes('/form')
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <ClipboardCheck className="w-3.5 h-3.5" />
-              <span>Inspection Form</span>
-            </button>
+            {user?.role !== 'inspector' && (
+              <button
+                type="button"
+                onClick={() => navigate('/form')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${window.location.pathname.includes('/form')
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+              >
+                <ClipboardCheck className="w-3.5 h-3.5" />
+                <span>Inspection Form</span>
+              </button>
+            )}
           </div>
 
           {/* User & Actions */}
           <div className="flex items-center gap-3">
-            {onResetForm && (
+            {onResetForm && user?.role !== 'inspector' && (
               <button
                 type="button"
                 onClick={onResetForm}
@@ -105,15 +108,26 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
             )}
 
             {user?.role === 'admin' && (
-              <button
-                type="button"
-                onClick={() => setShowUserModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 transition cursor-pointer shadow-sm"
-                title="Manage Users (Admin)"
-              >
-                <Users className="w-3.5 h-3.5 text-purple-600" />
-                <span>Users</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowStructureModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-amber-950 bg-amber-100/90 hover:bg-amber-200 border border-amber-300 transition cursor-pointer shadow-sm"
+                  title="Configure Form Checklist Structure (Sections & Items)"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-amber-800" />
+                  <span>Form Structure</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUserModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 transition cursor-pointer shadow-sm"
+                  title="Manage Users (Admin)"
+                >
+                  <Users className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Users</span>
+                </button>
+              </>
             )}
 
             {user && (
@@ -141,6 +155,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm }) => {
       <UserManagementModal
         isOpen={showUserModal}
         onClose={() => setShowUserModal(false)}
+      />
+
+      {/* Admin Form Structure Modal */}
+      <FormStructureModal
+        isOpen={showStructureModal}
+        onClose={() => setShowStructureModal(false)}
+        onStructureUpdated={onStructureUpdated}
       />
     </header>
   );

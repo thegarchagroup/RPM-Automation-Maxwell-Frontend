@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import type { Section, InspectionItemResult, InspectionItem } from '../types';
-import { MAXWELL_SECTIONS, QUICK_DEFECT_TAGS } from '../data/templateData';
-import { generateInspectionPdf, getInspectionPdfBlob } from '../services/pdfGenerator';
+import { QUICK_DEFECT_TAGS } from '../data/templateData';
+import maxwellInspectionData from '../data/Maxwell_Inspection_List.json';
+import { generateInspectionPdf, getInspectionPdfBlob, downloadPdfBlob } from '../services/pdfGenerator';
 import { useAuth } from '../context/AuthContext';
 import { Navbar } from '../components/Navbar';
 import { SignatureSelector } from '../components/SignatureSelector';
 import { api } from '../services/api';
+import { AppModal, type AppModalProps } from '../components/AppModal';
 import confetti from 'canvas-confetti';
 import {
   Check,
@@ -26,7 +28,6 @@ import {
   ClipboardCheck,
   ShieldCheck,
   Clock,
-  Save,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'maxwell_active_inspection';
@@ -62,6 +63,12 @@ const getQuarterFromDate = (dateStr: string): string => {
   if (month >= 5 && month <= 8) return '2nd Quarter (May - August)';
   if (month >= 9 && month <= 12) return '3rd Quarter (Sept - Dec)';
   return '1st Quarter (Jan - April)';
+};
+
+const generateDefaultSignatureUrl = (name: string): string => {
+  const cleanName = (name || 'Inspector').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="60" viewBox="0 0 220 60"><text x="10" y="42" font-family="'Brush Script MT', 'Dancing Script', cursive, sans-serif" font-size="28" font-style="italic" fill="#0f172a">${cleanName}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
 const formatDisplayDate = (dateStr: string) => {
@@ -101,8 +108,22 @@ export const InspectionForm: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // Sections
-  const sections: Section[] = MAXWELL_SECTIONS;
+  // Sections - loaded directly from Maxwell_Inspection_List.json for instant form loading
+  const [sections, setSections] = useState<Section[]>(
+    (maxwellInspectionData.sections as unknown as Section[]) || []
+  );
+
+  // Background handler if admin customizes form structure via Navbar
+  const loadTemplateStructure = async () => {
+    try {
+      const data = await api.getTemplate();
+      if (data?.sections && Array.isArray(data.sections) && data.sections.length > 0) {
+        setSections(data.sections);
+      }
+    } catch (e) {
+      console.warn('Template update note:', e);
+    }
+  };
 
   // URL Query param overrides
   const urlRoom = searchParams.get('room');
@@ -115,7 +136,6 @@ export const InspectionForm: React.FC = () => {
   const [activeInspectionId, setActiveInspectionId] = useState<number | null>(
     urlInspectionId ? parseInt(urlInspectionId, 10) : null
   );
-  const [, setSubmittedInspections] = useState<any[]>([]);
 
   // Header & Sign-off State
   const [selectedProperty, setSelectedProperty] = useState<string>(urlProperty || 'Maxwell');
@@ -144,6 +164,7 @@ export const InspectionForm: React.FC = () => {
   const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [isVerified, setIsVerified] = useState<boolean>(false);
   const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
+  const [inspectionStatus, setInspectionStatus] = useState<string>('in_progress');
 
   // Validation / Duplicate warning alert state
   const [duplicateAlert, setDuplicateAlert] = useState<string | null>(null);
@@ -157,6 +178,65 @@ export const InspectionForm: React.FC = () => {
     path?: string;
     share_url?: string;
   } | null>(null);
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+
+  // Custom Website Modal Dialog State (replaces all browser alert & confirm popups)
+  const [appModal, setAppModal] = useState<AppModalProps | null>(null);
+
+  const showSuccessModal = (
+    title: string,
+    message: string,
+    fileDetails?: AppModalProps['fileDetails'],
+    primaryAction?: AppModalProps['primaryAction'],
+    secondaryAction?: AppModalProps['secondaryAction']
+  ) => {
+    setAppModal({
+      isOpen: true,
+      type: 'success',
+      title,
+      message,
+      fileDetails,
+      primaryAction,
+      secondaryAction,
+      onClose: () => setAppModal(null),
+    });
+  };
+
+  const showWarningModal = (
+    title: string,
+    message: string,
+    secondaryMessage?: string,
+    primaryAction?: AppModalProps['primaryAction']
+  ) => {
+    setAppModal({
+      isOpen: true,
+      type: 'warning',
+      title,
+      message,
+      secondaryMessage,
+      primaryAction,
+      onClose: () => setAppModal(null),
+    });
+  };
+
+  const showConfirmModal = (
+    title: string,
+    message: string,
+    onConfirm: () => void,
+    confirmText = 'Proceed',
+    cancelText = 'Cancel'
+  ) => {
+    setAppModal({
+      isOpen: true,
+      type: 'confirm',
+      title,
+      message,
+      confirmText,
+      cancelText,
+      onConfirm,
+      onClose: () => setAppModal(null),
+    });
+  };
 
   // Items State (checklist_item_id -> InspectionItem)
   const [itemsMap, setItemsMap] = useState<Record<number, InspectionItem>>({});
@@ -165,22 +245,6 @@ export const InspectionForm: React.FC = () => {
 
   // Autosave timeout ref
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Load existing inspections list from backend for review queue
-  const loadSubmittedInspections = async () => {
-    try {
-      const data = await api.getInspections();
-      if (Array.isArray(data)) {
-        setSubmittedInspections(data);
-      }
-    } catch (e) {
-      console.warn('Could not load inspection list', e);
-    }
-  };
-
-  useEffect(() => {
-    loadSubmittedInspections();
-  }, []);
 
   // Helper to load inspection from backend record into form state
   const loadInspectionIntoForm = (insp: any) => {
@@ -200,11 +264,14 @@ export const InspectionForm: React.FC = () => {
       setInspectedBy(user.full_name || 'Inspector');
     }
     if (insp.inspected_by_signature_url) setInspectedBySignatureUrl(insp.inspected_by_signature_url);
-    
-    const submitted = insp.status === 'submitted' || insp.status === 'verified';
-    const verified = insp.status === 'verified';
+
+    const isInspRejected = insp.status === 'rejected';
+    const isInspAccepted = insp.status === 'accepted' || insp.status === 'verified';
+    const verified = isInspAccepted || isInspRejected;
+    const submitted = insp.status === 'submitted' || verified;
     setIsSubmitted(submitted);
     setIsVerified(verified);
+    setInspectionStatus(isInspRejected ? 'Rejected' : isInspAccepted ? 'Accepted' : (submitted ? 'Submitted' : 'in_progress'));
     if (insp.submitted_at) setSubmittedAt(insp.submitted_at);
     if (insp.verified_at) setVerifiedAt(insp.verified_at);
 
@@ -258,18 +325,85 @@ export const InspectionForm: React.FC = () => {
     }
   }, [urlInspectionId]);
 
+  // Guard: Inspector & Admin cannot open a generic/blank form
+  useEffect(() => {
+    if ((user?.role === 'inspector' || user?.role === 'admin') && !urlRoom && !urlInspectionId) {
+      showWarningModal(
+        'Dashboard Access Required',
+        `${user?.role === 'admin' ? 'Admin' : 'Inspectors'} can only view forms that have an RPM date from the Dashboard.`,
+        'Please select an inspected room from the Dashboard to view or sign-off.',
+        {
+          label: 'Return to Dashboard',
+          onClick: () => navigate('/dashboard'),
+        }
+      );
+    }
+  }, [user, urlRoom, urlInspectionId, navigate]);
+
   // If room param is present, load the inspection for this room
   useEffect(() => {
     if (urlRoom && !urlInspectionId) {
       api.getInspections({ room_number: urlRoom, property_name: selectedProperty })
         .then((list) => {
           if (list && list.length > 0) {
-            loadInspectionIntoForm(list[0]);
+            const insp = list[0];
+            if ((user?.role === 'inspector' || user?.role === 'admin') && !insp.inspection_date) {
+              showWarningModal(
+                'RPM Submission Required',
+                `${user?.role === 'admin' ? 'Admin' : 'Inspectors'} can only view forms that have an RPM date. Room ${urlRoom} has no RPM date yet.`,
+                'This room has not yet undergone maintenance by an RPM Technician.',
+                {
+                  label: 'Return to Dashboard',
+                  onClick: () => navigate('/dashboard'),
+                }
+              );
+              return;
+            }
+            loadInspectionIntoForm(insp);
+          } else {
+            api.getRpmRecords({ property_name: selectedProperty }).then((records) => {
+              const cleanTarget = urlRoom.toLowerCase().replace(/room\s*/i, '').trim();
+              const matched = records?.find((r: any) => {
+                const cleanR = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
+                return cleanR === cleanTarget || r.room_or_area.toLowerCase().trim() === urlRoom.toLowerCase().trim();
+              });
+              const rpmDate = matched?.rpm_date || matched?.eng_date;
+              if (matched) {
+                if (matched.category) setRoomType(matched.category === 'guest_room' ? 'Deluxe' : matched.category);
+                if (matched.quarter) setSelectedQuarter(matched.quarter);
+                if (rpmDate) {
+                  setSelectedDate(formatDateForInput(rpmDate));
+                  setIsSubmitted(true);
+                }
+                if (matched.inspection_status === 'Accepted' || matched.inspection_status === 'Rejected') {
+                  setIsVerified(true);
+                  setInspectionStatus(matched.inspection_status);
+                }
+              }
+              if (user?.role === 'inspector' || user?.role === 'admin') {
+                if (!rpmDate) {
+                  showWarningModal(
+                    'RPM Submission Required',
+                    `${user?.role === 'admin' ? 'Admin' : 'Inspectors'} can only view forms that have an RPM date. Room ${urlRoom} does not have an RPM date yet.`,
+                    'Please select a completed or scheduled RPM room from the Dashboard.',
+                    {
+                      label: 'Return to Dashboard',
+                      onClick: () => navigate('/dashboard'),
+                    }
+                  );
+                } else {
+                  setIsSubmitted(true);
+                  if (user?.role === 'inspector' && user.full_name && !inspectedBy) {
+                    setInspectedBy(user.full_name);
+                  }
+                }
+              }
+            }).catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     }
-  }, [urlRoom, selectedProperty, urlInspectionId]);
+  }, [urlRoom, selectedProperty, urlInspectionId, user, navigate]);
 
   // Load saved state on mount if no URL params
   useEffect(() => {
@@ -296,6 +430,7 @@ export const InspectionForm: React.FC = () => {
         if (data.submittedAt) setSubmittedAt(data.submittedAt);
         if (data.isVerified) setIsVerified(data.isVerified);
         if (data.verifiedAt) setVerifiedAt(data.verifiedAt);
+        if (data.inspectionStatus) setInspectionStatus(data.inspectionStatus);
         if (data.activeInspectionId) setActiveInspectionId(data.activeInspectionId);
       }
     } catch (e) {
@@ -321,6 +456,7 @@ export const InspectionForm: React.FC = () => {
     submittedAt: string | null;
     isVerified: boolean;
     verifiedAt: string | null;
+    inspectionStatus: string;
     activeInspectionId: number | null;
   }>) => {
     setIsSaving(true);
@@ -341,6 +477,7 @@ export const InspectionForm: React.FC = () => {
       submittedAt,
       isVerified,
       verifiedAt,
+      inspectionStatus,
       activeInspectionId,
       ...override,
     };
@@ -420,22 +557,21 @@ export const InspectionForm: React.FC = () => {
     });
   };
 
-  // Quick Pass all items in a section
+  // Quick Accept/Pass all items in a section
   const handlePassSection = (section: Section) => {
     setItemsMap((prev) => {
       const newMap = { ...prev };
       section.items.forEach((item) => {
-        if (!newMap[item.id] || !newMap[item.id].result) {
-          newMap[item.id] = {
-            id: item.id,
-            inspection_id: activeInspectionId || 1,
-            checklist_item_id: item.id,
-            result: 'pass',
-            remark: null,
-            inspector_remark: null,
-            photo_url: null,
-          };
-        }
+        const existing = newMap[item.id];
+        newMap[item.id] = {
+          id: item.id,
+          inspection_id: activeInspectionId || 1,
+          checklist_item_id: item.id,
+          result: 'pass',
+          remark: existing?.remark || null,
+          inspector_remark: existing?.inspector_remark || null,
+          photo_url: null,
+        };
       });
       saveInspectionState({ itemsMap: newMap });
       return newMap;
@@ -444,20 +580,22 @@ export const InspectionForm: React.FC = () => {
 
   // Reset / Clear Form for new room
   const handleResetForm = () => {
-    if (
-      window.confirm(
-        'Start a new inspection? Current form answers will be reset for a new room inspection.'
-      )
-    ) {
-      setItemsMap({});
-      setOverallRemark('');
-      setSelectedDate(getTodayDateString());
-      setIsSubmitted(false);
-      setSubmittedAt(null);
-      setDuplicateAlert(null);
-      localStorage.removeItem(STORAGE_KEY);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    showConfirmModal(
+      'Start New Inspection?',
+      'Current form answers will be reset for a new room inspection. Are you sure you want to proceed?',
+      () => {
+        setItemsMap({});
+        setOverallRemark('');
+        setSelectedDate(getTodayDateString());
+        setIsSubmitted(false);
+        setSubmittedAt(null);
+        setDuplicateAlert(null);
+        localStorage.removeItem(STORAGE_KEY);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+      'Yes, Reset Form',
+      'Cancel'
+    );
   };
 
   // Check duplicate inspection in this quarter before submitting
@@ -486,29 +624,37 @@ export const InspectionForm: React.FC = () => {
 
   // 1. Submit by RPM User: Saves details in DB (status: 'submitted') and uploads RPM_{roomno}_{date}.pdf to Dropbox
   const handleRpmSubmit = async () => {
+    if (user?.role === 'inspector') {
+      showWarningModal(
+        'Action Not Permitted',
+        'Inspectors cannot submit new RPM forms. Inspectors can only inspect already submitted forms.'
+      );
+      return;
+    }
+
     setDuplicateAlert(null);
 
     // Mandatory Validations for RPM
     if (!selectedDate) {
-      alert('⚠️ Mandatory Field Missing: Please select an Inspection Date.');
+      showWarningModal('Inspection Date Required', 'Please select an Inspection Date before submitting.');
       document.getElementById('manual-date-input')?.focus();
       return;
     }
 
     if (!selectedQuarter) {
-      alert('⚠️ Mandatory Field Missing: Please select the Inspection Quarter.');
+      showWarningModal('Inspection Quarter Required', 'Please select the Inspection Quarter before submitting.');
       document.getElementById('quarter-select-input')?.focus();
       return;
     }
 
     if (!maintenanceCarriedBy.trim()) {
-      alert('⚠️ Mandatory Field Missing: Please enter technician name under "Maintenance carried By".');
+      showWarningModal('Technician Name Required', 'Please enter technician name under "Maintenance carried By".');
       document.getElementById('maintenance-carried-by-input')?.focus();
       return;
     }
 
     if (!maintenanceSignatureUrl) {
-      alert('⚠️ Mandatory Field Missing: Maintenance Signature is required. Please upload or select a signature.');
+      showWarningModal('Maintenance Signature Required', 'Maintenance Signature is required before submitting. Please upload or select a signature.');
       const footerEl = document.getElementById('form-footer');
       if (footerEl) footerEl.scrollIntoView({ behavior: 'smooth' });
       return;
@@ -523,6 +669,11 @@ export const InspectionForm: React.FC = () => {
       if (isDuplicate) {
         const msg = `Room ${roomNumber} has ALREADY been submitted for ${selectedQuarter}. Duplicate inspection submissions for the same quarter are blocked.`;
         setDuplicateAlert(msg);
+        showWarningModal(
+          'Duplicate Inspection Blocked',
+          msg,
+          'To update this inspection, an administrator can edit it via the Dashboard, or you may inspect a different room.'
+        );
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
@@ -631,6 +782,8 @@ export const InspectionForm: React.FC = () => {
         room_number: roomNumber,
         quarter: selectedQuarter,
         year,
+        document_type: 'RPM',
+        status: 'submitted',
       });
 
       setDropboxStatus({
@@ -655,36 +808,72 @@ export const InspectionForm: React.FC = () => {
       submittedAt: nowStr,
       activeInspectionId: savedId,
     });
-    loadSubmittedInspections();
 
     try {
       confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
-    } catch (e) {}
+    } catch (e) { }
 
     if (rpmDropboxSuccess) {
-      alert(`✓ Form successfully submitted!\nDocument uploaded to Dropbox: ${rpmFilename}`);
+      showSuccessModal(
+        'Form Successfully Submitted!',
+        `Your RPM checklist for Room ${roomNumber} (${selectedQuarter}) has been saved to the database.`,
+        {
+          label: 'Dropbox Uploaded Document',
+          filename: rpmFilename,
+        },
+        {
+          label: 'Go to Dashboard',
+          onClick: () => navigate('/dashboard'),
+        },
+        {
+          label: 'Start Next Room',
+          onClick: () => {
+            setAppModal(null);
+            handleResetForm();
+          },
+        }
+      );
     } else {
-      alert(`✓ Form successfully submitted and saved to database.`);
+      showSuccessModal(
+        'Form Successfully Submitted!',
+        `Your RPM checklist for Room ${roomNumber} has been saved to the database.`,
+        undefined,
+        {
+          label: 'Go to Dashboard',
+          onClick: () => navigate('/dashboard'),
+        }
+      );
     }
 
     const actionsEl = document.getElementById('submission-actions');
     if (actionsEl) actionsEl.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // 2. Submit by Inspector: Enters Inspector Name and Signature, updates status to 'verified', saves Inspection_{roomno}_{date}.pdf to Dropbox with remarks
-  const handleInspectorSubmit = async () => {
-    // Validations for Inspector
-    if (!inspectedBy.trim()) {
-      alert('⚠️ Mandatory Field Missing: Please enter Inspector Name.');
-      document.getElementById('inspected-by-input')?.focus();
+  // 2. Submit by Inspector: Accept or Reject the inspection, updates status in DB & RPM Schedule, saves PDF to Dropbox
+  const handleInspectorSubmit = async (outcome: 'Accepted' | 'Rejected' = 'Accepted') => {
+    // Guard: Inspector cannot inspect unsubmitted form (unless form has date from RPM schedule)
+    if (!isSubmitted && !selectedDate) {
+      showWarningModal(
+        'Inspection Not Ready',
+        'Cannot inspect: This form has not been submitted by the RPM technician yet. Inspectors can only inspect already submitted forms.'
+      );
       return;
     }
 
-    if (!inspectedBySignatureUrl) {
-      alert('⚠️ Mandatory Field Missing: Inspector Signature is required. Please upload or select signature under "Inspected By".');
-      const footerEl = document.getElementById('form-footer');
-      if (footerEl) footerEl.scrollIntoView({ behavior: 'smooth' });
-      return;
+    const effectiveInspector = inspectedBy.trim() || user?.full_name || 'Inspector';
+    if (!inspectedBy.trim()) {
+      setInspectedBy(effectiveInspector);
+    }
+
+    let effectiveSignature = inspectedBySignatureUrl;
+    if (!effectiveSignature) {
+      effectiveSignature = generateDefaultSignatureUrl(effectiveInspector);
+      setInspectedBySignatureUrl(effectiveSignature);
+    }
+
+    const effectiveInspectorRemark = inspectorRemark.trim() || (outcome === 'Rejected' ? 'Inspection Rejected by Inspector.' : 'Inspection Satisfactory.');
+    if (!inspectorRemark.trim()) {
+      setInspectorRemark(effectiveInspectorRemark);
     }
 
     const nowStr = new Date().toLocaleDateString('en-GB', {
@@ -695,11 +884,15 @@ export const InspectionForm: React.FC = () => {
       minute: '2-digit',
     });
 
+    setIsSubmitted(true);
     setIsVerified(true);
     setVerifiedAt(nowStr);
+    setInspectionStatus(outcome);
+
+    const dbInspectionStatus = outcome === 'Rejected' ? 'rejected' : 'verified';
 
     let savedId = activeInspectionId;
-    // 1. Update in DB with verified status, inspector signature, and remarks
+    // 1. Update in DB with verified/rejected status, inspector signature, and remarks
     try {
       const payload = {
         room_number: roomNumber,
@@ -707,14 +900,14 @@ export const InspectionForm: React.FC = () => {
         inspection_date: formatDisplayDate(selectedDate),
         property_name: selectedProperty,
         quarter: selectedQuarter,
-        status: 'verified',
-        inspected_by: inspectedBy,
-        inspected_by_signature_url: inspectedBySignatureUrl,
+        status: dbInspectionStatus,
+        inspected_by: effectiveInspector,
+        inspected_by_signature_url: effectiveSignature,
         overall_remark: overallRemark,
-        inspector_remark: inspectorRemark,
+        inspector_remark: effectiveInspectorRemark,
         items: Object.values(itemsMap).map((it) => ({
-          checklist_item_id: it.checklist_item_id,
-          result: it.result || 'PASS',
+          checklist_item_id: it.checklist_item_id || it.id,
+          result: it.result || (outcome === 'Rejected' ? 'fail' : 'pass'),
           remark: it.remark,
           inspector_remark: it.inspector_remark || null,
         })),
@@ -726,8 +919,8 @@ export const InspectionForm: React.FC = () => {
       } else {
         const res = await api.submitInspection({
           ...payload,
-          maintenance_carried_by: maintenanceCarriedBy,
-          signature_url: maintenanceSignatureUrl,
+          maintenance_carried_by: maintenanceCarriedBy || 'RPM Technician',
+          signature_url: maintenanceSignatureUrl || generateDefaultSignatureUrl('RPM Technician'),
         });
         savedId = res.id;
         setActiveInspectionId(res.id);
@@ -736,10 +929,10 @@ export const InspectionForm: React.FC = () => {
       console.warn('Backend inspector update note:', err);
     }
 
-    // 2. Sync RPM Schedule Record to Done
+    // 2. Sync RPM Schedule Record to Accepted / Rejected on Dashboard
     try {
       const year = getYearFromDateString(selectedDate);
-      const records = await api.getRpmRecords({ year, quarter: selectedQuarter });
+      const records = await api.getRpmRecords({ property_name: selectedProperty });
       const cleanTarget = roomNumber.toLowerCase().replace(/room\s*/i, '').trim();
       const matched = records?.find((r) => {
         const rClean = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
@@ -749,7 +942,7 @@ export const InspectionForm: React.FC = () => {
       const formattedDate = formatDisplayDate(selectedDate);
       if (matched) {
         await api.updateRpmRecord(matched.id, {
-          inspection_status: 'Done',
+          inspection_status: outcome,
           inspection_date: formattedDate,
         });
       } else {
@@ -757,10 +950,10 @@ export const InspectionForm: React.FC = () => {
           property_name: selectedProperty,
           room_or_area: roomNumber.toLowerCase().includes('room') ? roomNumber : `Room ${roomNumber}`,
           category: 'guest_room',
-          floor: `Level ${roomNumber.charAt(0)}`,
+          floor: `Level ${roomNumber.replace(/[^0-9]/g, '').charAt(0) || '1'}`,
           quarter: selectedQuarter,
           year: year,
-          inspection_status: 'Done',
+          inspection_status: outcome,
           inspection_date: formattedDate,
         });
       }
@@ -782,15 +975,15 @@ export const InspectionForm: React.FC = () => {
         roomType,
         inspectionDate: formattedDate,
         quarter: selectedQuarter,
-        status: 'verified',
+        status: dbInspectionStatus,
         sections,
         itemsMap,
         overallRemark,
-        inspectorRemark,
+        inspectorRemark: effectiveInspectorRemark,
         maintenanceCarriedBy,
-        signatureUrl: maintenanceSignatureUrl,
-        inspectedByName: inspectedBy,
-        inspectedBySignatureUrl,
+        signatureUrl: maintenanceSignatureUrl || generateDefaultSignatureUrl('RPM Technician'),
+        inspectedByName: effectiveInspector,
+        inspectedBySignatureUrl: effectiveSignature,
         inspectedAt: nowStr,
       });
       inspectorFilename = filename;
@@ -800,6 +993,8 @@ export const InspectionForm: React.FC = () => {
         room_number: roomNumber,
         quarter: selectedQuarter,
         year,
+        document_type: 'Inspection',
+        status: outcome,
       });
 
       setDropboxStatus({
@@ -822,18 +1017,37 @@ export const InspectionForm: React.FC = () => {
     saveInspectionState({
       isVerified: true,
       verifiedAt: nowStr,
+      inspectionStatus: outcome,
       activeInspectionId: savedId,
     });
-    loadSubmittedInspections();
 
     try {
       confetti({ particleCount: 140, spread: 100, origin: { y: 0.6 } });
-    } catch (e) {}
+    } catch (e) { }
 
     if (inspectorDropboxSuccess) {
-      alert(`✓ Inspection verified!\nDocument uploaded to Dropbox: ${inspectorFilename}`);
+      showSuccessModal(
+        `Inspection Marked as ${outcome.toUpperCase()}!`,
+        `Inspection sign-off for Room ${roomNumber} has been officially recorded and updated in the database.`,
+        {
+          label: 'Dropbox Inspection Document',
+          filename: inspectorFilename,
+        },
+        {
+          label: 'Return to Dashboard',
+          onClick: () => navigate('/dashboard'),
+        }
+      );
     } else {
-      alert(`✓ Inspection verified and saved to database.`);
+      showSuccessModal(
+        `Inspection Marked as ${outcome.toUpperCase()}!`,
+        `Inspection sign-off for Room ${roomNumber} has been recorded and updated in the database.`,
+        undefined,
+        {
+          label: 'Return to Dashboard',
+          onClick: () => navigate('/dashboard'),
+        }
+      );
     }
 
     const actionsEl = document.getElementById('submission-actions');
@@ -930,6 +1144,8 @@ export const InspectionForm: React.FC = () => {
           room_number: roomNumber,
           quarter: selectedQuarter,
           year,
+          document_type: 'Inspection',
+          status: inspectionStatus || 'Accepted',
         });
 
         setDropboxStatus({
@@ -938,7 +1154,16 @@ export const InspectionForm: React.FC = () => {
           path: dbxRes.path,
           share_url: dbxRes.share_url,
         });
-        alert(`✓ Inspection form updated! Dropbox file replaced: ${filename}`);
+        showSuccessModal(
+          'Inspection Form Updated!',
+          `Inspection document successfully updated by Admin and replaced in Dropbox.`,
+          {
+            label: 'Replaced Dropbox Document',
+            filename,
+            path: dbxRes.path,
+            shareUrl: dbxRes.share_url,
+          }
+        );
       } else if (targetStatus === 'submitted') {
         const { blob, filename } = getInspectionPdfBlob({
           documentType: 'RPM',
@@ -960,6 +1185,8 @@ export const InspectionForm: React.FC = () => {
           room_number: roomNumber,
           quarter: selectedQuarter,
           year,
+          document_type: 'RPM',
+          status: 'submitted',
         });
 
         setDropboxStatus({
@@ -968,9 +1195,21 @@ export const InspectionForm: React.FC = () => {
           path: dbxRes.path,
           share_url: dbxRes.share_url,
         });
-        alert(`✓ RPM form updated! Dropbox file replaced: ${filename}`);
+        showSuccessModal(
+          'RPM Form Updated!',
+          `RPM document successfully updated by Admin and replaced in Dropbox.`,
+          {
+            label: 'Replaced Dropbox Document',
+            filename,
+            path: dbxRes.path,
+            shareUrl: dbxRes.share_url,
+          }
+        );
       } else {
-        alert('✓ Form draft successfully updated in database by Admin.');
+        showSuccessModal(
+          'Draft Saved Successfully',
+          'Form draft successfully updated in database by Admin.'
+        );
       }
 
       saveInspectionState({
@@ -978,36 +1217,79 @@ export const InspectionForm: React.FC = () => {
         isVerified: targetStatus === 'verified',
         activeInspectionId: savedId,
       });
-      loadSubmittedInspections();
     } catch (err: any) {
-      alert(`Admin update failed: ${err?.message || 'Check connection'}`);
+      setAppModal({
+        isOpen: true,
+        type: 'error',
+        title: 'Admin Update Failed',
+        message: err?.message || 'Check database and network connection.',
+        onClose: () => setAppModal(null),
+      });
     } finally {
       setIsSavingDropbox(false);
     }
   };
+  void handleAdminSave;
 
-  // Download PDF helper: supports 'RPM' and 'Inspection'
-  const handleDownloadPdf = (docType: 'RPM' | 'Inspection' = 'RPM') => {
+  // Download PDF helper: hits Dropbox download API with client-side fallback
+  const handleDownloadPdf = async (docType: 'RPM' | 'Inspection' = 'RPM') => {
+    setIsDownloading(true);
+    const cleanRoom = roomNumber.replace(/Room\s*/i, '').trim();
+    const year = getYearFromDateString(selectedDate);
     const formattedDate = formatDisplayDate(selectedDate);
-    generateInspectionPdf({
-      documentType: docType,
-      orientation: docType === 'Inspection' ? 'landscape' : 'portrait',
-      propertyName: selectedProperty,
-      roomNumber,
-      roomType,
-      inspectionDate: formattedDate,
-      quarter: selectedQuarter,
-      status: isVerified ? 'verified' : (isSubmitted ? 'submitted' : 'in_progress'),
-      sections,
-      itemsMap,
-      overallRemark,
-      inspectorRemark,
-      maintenanceCarriedBy: maintenanceCarriedBy || 'Maintenance Staff',
-      signatureUrl: maintenanceSignatureUrl,
-      inspectedByName: inspectedBy || undefined,
-      inspectedBySignatureUrl: inspectedBySignatureUrl || null,
-      inspectedAt: verifiedAt || (inspectedBy ? formattedDate : undefined),
-    });
+    const resolvedStatus = inspectionStatus === 'Rejected'
+      ? 'rejected'
+      : (isVerified || inspectionStatus === 'Accepted' ? 'accepted' : (isSubmitted ? 'submitted' : 'in_progress'));
+
+    try {
+      // 1. Fetch official uploaded PDF directly from Dropbox via backend proxy
+      const { blob, filename } = await api.downloadDropboxPdf({
+        room_number: cleanRoom,
+        inspection_date: selectedDate,
+        year,
+        quarter: selectedQuarter,
+        document_type: docType,
+      });
+
+      downloadPdfBlob(blob, filename);
+
+      setDropboxStatus({
+        success: true,
+        message: `Downloaded ${filename} from Dropbox.`,
+      });
+      return;
+    } catch (err: any) {
+      console.warn(`Dropbox download not found:`, err);
+      showConfirmModal(
+        'PDF Not In Dropbox',
+        `PDF not found in Dropbox for Room ${cleanRoom} (${err?.message || 'File not yet uploaded'}).\n\nWould you like to generate and download a fresh ${docType} PDF directly?`,
+        () => {
+          generateInspectionPdf({
+            documentType: docType,
+            orientation: docType === 'Inspection' ? 'landscape' : 'portrait',
+            propertyName: selectedProperty,
+            roomNumber,
+            roomType,
+            inspectionDate: formattedDate,
+            quarter: selectedQuarter,
+            status: resolvedStatus,
+            sections,
+            itemsMap,
+            overallRemark,
+            inspectorRemark,
+            maintenanceCarriedBy: maintenanceCarriedBy || 'Maintenance Staff',
+            signatureUrl: maintenanceSignatureUrl,
+            inspectedByName: inspectedBy || undefined,
+            inspectedBySignatureUrl: inspectedBySignatureUrl || null,
+            inspectedAt: verifiedAt || (inspectedBy ? formattedDate : undefined),
+          });
+        },
+        `Generate ${docType} PDF`,
+        'Cancel'
+      );
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   // Save PDF to Dropbox on demand: supports 'RPM' and 'Inspection'
@@ -1016,6 +1298,10 @@ export const InspectionForm: React.FC = () => {
     setDropboxStatus(null);
     try {
       const formattedDate = formatDisplayDate(selectedDate);
+      const resolvedStatus = inspectionStatus === 'Rejected'
+        ? 'rejected'
+        : (isVerified || inspectionStatus === 'Accepted' ? 'accepted' : (isSubmitted ? 'submitted' : 'in_progress'));
+
       const { blob, filename } = getInspectionPdfBlob({
         documentType: docType,
         orientation: docType === 'Inspection' ? 'landscape' : 'portrait',
@@ -1024,7 +1310,7 @@ export const InspectionForm: React.FC = () => {
         roomType,
         inspectionDate: formattedDate,
         quarter: selectedQuarter,
-        status: isVerified ? 'verified' : (isSubmitted ? 'submitted' : 'in_progress'),
+        status: resolvedStatus,
         sections,
         itemsMap,
         overallRemark,
@@ -1041,6 +1327,8 @@ export const InspectionForm: React.FC = () => {
         room_number: roomNumber,
         quarter: selectedQuarter,
         year,
+        document_type: docType,
+        status: resolvedStatus,
       });
 
       setDropboxStatus({
@@ -1094,7 +1382,7 @@ export const InspectionForm: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-200/70 flex flex-col pb-32">
-      <Navbar onResetForm={handleResetForm} />
+      <Navbar onResetForm={handleResetForm} onStructureUpdated={loadTemplateStructure} />
 
       {/* Sticky Floating Section Navigator */}
       <div className="sticky top-16 z-30 bg-slate-900/95 backdrop-blur text-white shadow-md border-b border-slate-800 py-2.5 px-4 print:hidden">
@@ -1153,40 +1441,101 @@ export const InspectionForm: React.FC = () => {
 
       {/* Main Form Sheet */}
       <main className="max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6">
-        {/* Admin Edit & Document Replacement Access Toolbar */}
+        {/* Admin View-Only Toolbar */}
         {isAdmin && (
-          <div className="mb-6 p-4 rounded-2xl bg-purple-950/90 border-2 border-purple-500 text-purple-100 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl print:hidden animate-in fade-in slide-in-from-top-2">
+          <div className="mb-6 p-4 rounded-2xl bg-slate-900 border border-slate-700 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl print:hidden animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-purple-700 flex items-center justify-center text-white shadow">
                 <ShieldCheck className="w-5 h-5 text-amber-300" />
               </div>
               <div>
                 <div className="font-extrabold text-sm sm:text-base text-white flex items-center gap-2">
-                  <span>Admin Edit & Replacement Access</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-slate-950">
-                    Room {roomNumber} • {isVerified ? 'Verified' : isSubmitted ? 'Submitted' : 'Draft'}
+                  <span>Admin Mode: View-Only</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isVerified
+                        ? 'bg-blue-400 text-slate-950'
+                        : isSubmitted
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-slate-700 text-slate-200'
+                      }`}
+                  >
+                    Room {roomNumber} • {isVerified ? 'Verified' : isSubmitted ? 'Submitted' : 'Not Submitted'}
                   </span>
                 </div>
-                <div className="text-xs text-purple-200 mt-0.5">
-                  Full edit access granted. Modifying and saving will replace the form in the database and update Dropbox files.
+                <div className="text-xs text-slate-300 mt-0.5">
+                  {isSubmitted || isVerified
+                    ? 'Official submitted form responses are locked in view-only mode and cannot be edited by Admin.'
+                    : "This form has not been submitted yet. To customize the form structure (sections & items), use the 'Form Structure' button in the navbar."}
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
+              {(isSubmitted || isVerified) && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadPdf('RPM')}
+                    disabled={isDownloading}
+                    className="py-2 px-3.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white flex items-center gap-1.5 shadow transition cursor-pointer disabled:opacity-60"
+                    title="Download RPM PDF from Dropbox"
+                  >
+                    {isDownloading ? (
+                      <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                    ) : (
+                      <FileDown className="w-4 h-4 text-amber-400" />
+                    )}
+                    <span>RPM PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadPdf('Inspection')}
+                    disabled={isDownloading}
+                    className="py-2 px-3.5 rounded-xl text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white flex items-center gap-1.5 shadow transition cursor-pointer disabled:opacity-60"
+                    title="Download Inspection PDF from Dropbox"
+                  >
+                    {isDownloading ? (
+                      <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                    ) : (
+                      <FileDown className="w-4 h-4 text-emerald-400" />
+                    )}
+                    <span>Inspection PDF</span>
+                  </button>
+                </>
+              )}
               <button
                 type="button"
-                onClick={handleAdminSave}
-                disabled={isSavingDropbox}
-                className="py-2.5 px-4 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center gap-1.5 shadow transition cursor-pointer active:scale-95 disabled:opacity-60"
+                onClick={() => navigate('/dashboard')}
+                className="py-2 px-3 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
               >
-                {isSavingDropbox ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
-                <span>{isSavingDropbox ? 'Replacing...' : 'Save & Replace Form'}</span>
+                Dashboard
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Inspector Mode: Awaiting RPM Submission Banner */}
+        {user?.role === 'inspector' && !isSubmitted && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-white shadow flex-shrink-0">
+                <Clock className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <div className="font-extrabold text-sm sm:text-base text-amber-900 uppercase tracking-wide">
+                  Awaiting RPM Technician Submission
+                </div>
+                <div className="text-xs text-amber-800 mt-0.5">
+                  Room {roomNumber} has not been completed by the RPM maintenance technician yet. Inspectors cannot submit new forms and can only inspect already submitted forms.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard')}
+              className="py-2 px-3.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow transition cursor-pointer flex-shrink-0"
+            >
+              Back to Dashboard
+            </button>
           </div>
         )}
 
@@ -1224,8 +1573,8 @@ export const InspectionForm: React.FC = () => {
         {/* Dropbox Upload Status Banner */}
         {dropboxStatus && (
           <div className={`mb-6 p-4 rounded-2xl border flex items-center justify-between gap-4 shadow-xl animate-in fade-in slide-in-from-top-2 ${dropboxStatus.success
-              ? 'bg-blue-950/90 border-blue-500 text-blue-100'
-              : 'bg-rose-950/90 border-rose-600 text-rose-100'
+            ? 'bg-blue-950/90 border-blue-500 text-blue-100'
+            : 'bg-rose-950/90 border-rose-600 text-rose-100'
             }`}>
             <div className="flex items-center gap-3">
               {dropboxStatus.success ? (
@@ -1286,7 +1635,7 @@ export const InspectionForm: React.FC = () => {
                 <span>Property:</span>
               </label>
               <select
-                disabled={!isAdmin && (isSubmitted || isVerified || user?.role === 'inspector')}
+                disabled={isAdmin || isSubmitted || isVerified || user?.role === 'inspector'}
                 value={selectedProperty}
                 onChange={(e) => {
                   setSelectedProperty(e.target.value);
@@ -1306,7 +1655,7 @@ export const InspectionForm: React.FC = () => {
               </label>
               <input
                 type="text"
-                disabled={!isAdmin && (isSubmitted || isVerified || user?.role === 'inspector')}
+                disabled={isAdmin || isSubmitted || isVerified || user?.role === 'inspector'}
                 value={roomType}
                 onChange={(e) => {
                   setRoomType(e.target.value);
@@ -1323,7 +1672,7 @@ export const InspectionForm: React.FC = () => {
               </label>
               <input
                 type="text"
-                disabled={!isAdmin && (isSubmitted || isVerified || user?.role === 'inspector')}
+                disabled={isAdmin || isSubmitted || isVerified || user?.role === 'inspector'}
                 value={roomNumber}
                 onChange={(e) => {
                   setRoomNumber(e.target.value);
@@ -1349,13 +1698,14 @@ export const InspectionForm: React.FC = () => {
                     <h2 className="text-sm sm:text-base font-bold text-slate-900 uppercase tracking-wide">
                       {section.code}. {section.title}
                     </h2>
-                    {(!isSubmitted || isAdmin) && user?.role !== 'inspector' && (
+                    {!isAdmin && ((user?.role === 'inspector' && isSubmitted && !isVerified) || (user?.role !== 'inspector' && !isSubmitted)) && (
                       <button
                         type="button"
                         onClick={() => handlePassSection(section)}
                         className="text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded border border-emerald-300 flex items-center gap-1 transition cursor-pointer print:hidden"
+                        title="Pass all items in this section"
                       >
-                        <Check className="w-3 h-3 text-emerald-600" />
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
                         <span>Pass Section</span>
                       </button>
                     )}
@@ -1368,11 +1718,12 @@ export const InspectionForm: React.FC = () => {
                         <tr className="bg-slate-50 border-b border-slate-300 text-slate-700 font-bold uppercase text-[11px]">
                           <th className="py-2.5 px-3 w-10 text-center border-r border-slate-300">#</th>
                           <th className="py-2.5 px-4 border-r border-slate-300">Checklist Item</th>
-                          <th className="py-2.5 px-3 w-36 text-center border-r border-slate-300">
-                            <div className="flex items-center justify-center gap-1">
-                              <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
-                              <span className="text-slate-400 font-normal">/</span>
-                              <X className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                          <th className="py-2.5 px-3 w-44 text-center border-r border-slate-300">
+                            <div className="flex flex-col items-center justify-center">
+                              <span className="font-extrabold tracking-wider text-xs text-slate-800 uppercase">Status</span>
+                              <span className="text-[10px] font-semibold text-slate-500 tracking-tight lowercase">
+                                (pass / fail)
+                              </span>
                             </div>
                           </th>
                           <th className="py-2.5 px-3.5 w-60 border-r border-slate-300">
@@ -1397,10 +1748,18 @@ export const InspectionForm: React.FC = () => {
                           const inspRem = ans?.inspector_remark || '';
                           const isFail = res === 'fail';
 
-                          // Status-based disabled rules
-                          const isResultDisabled = !isAdmin && (user?.role === 'inspector' || isSubmitted || isVerified);
-                          const isRpmRemarkDisabled = !isAdmin && (user?.role === 'inspector' || isSubmitted || isVerified);
-                          const isInspectorRemarkDisabled = !isAdmin && (user?.role === 'rpm' || isVerified);
+                          const isInspector = user?.role === 'inspector';
+                          const isRpm = user?.role === 'rpm';
+
+                          // Status-based disabled rules:
+                          // - Admin can view submitted forms, but CANNOT edit them
+                          // - Once verified, everything is locked
+                          // - RPM technician cannot edit results once submitted
+                          // - Inspector cannot edit unsubmitted forms (!isSubmitted)
+                          // - Inspector can toggle Pass / Fail during verification (isSubmitted && !isVerified)
+                          const isResultDisabled = isAdmin || isVerified || (isRpm && isSubmitted) || (isInspector && !isSubmitted);
+                          const isRpmRemarkDisabled = isAdmin || isInspector || isSubmitted || isVerified;
+                          const isInspectorRemarkDisabled = isAdmin || isRpm || isVerified || (isInspector && !isSubmitted);
 
                           return (
                             <tr
@@ -1422,37 +1781,37 @@ export const InspectionForm: React.FC = () => {
                                 {item.description}
                               </td>
 
-                              {/* Pass / Defect Button Toggle */}
+                              {/* Status Column: Pass / Fail Buttons */}
                               <td className="py-2 px-3 border-r border-slate-200 align-top text-center">
-                                <div className="inline-flex items-center rounded-lg border border-slate-300 p-0.5 bg-slate-100">
-                                  {/* PASS */}
+                                <div className="inline-flex items-center rounded-lg border border-slate-300 p-0.5 bg-slate-100 shadow-inner">
+                                  {/* PASS BUTTON */}
                                   <button
                                     type="button"
                                     disabled={isResultDisabled}
                                     onClick={() => handleItemResult(item.id, 'pass')}
                                     title="Pass (No Defects)"
-                                    className={`px-2.5 py-1 text-xs font-bold rounded-md flex items-center gap-0.5 transition cursor-pointer disabled:cursor-not-allowed ${res === 'pass'
-                                      ? 'bg-emerald-600 text-white shadow-sm'
+                                    className={`px-2.5 py-1 text-xs font-bold rounded-md flex items-center gap-1 transition cursor-pointer disabled:cursor-not-allowed ${res === 'pass'
+                                      ? 'bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-700/20'
                                       : 'text-slate-600 hover:text-emerald-700 hover:bg-white'
                                       }`}
                                   >
-                                    <Check className="w-3.5 h-3.5" />
+                                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
                                     <span>Pass</span>
                                   </button>
 
-                                  {/* DEFECT / FAIL */}
+                                  {/* FAIL BUTTON */}
                                   <button
                                     type="button"
                                     disabled={isResultDisabled}
                                     onClick={() => handleItemResult(item.id, 'fail')}
-                                    title="Defect / Fail"
-                                    className={`px-2 py-1 text-xs font-bold rounded-md flex items-center gap-0.5 transition cursor-pointer disabled:cursor-not-allowed ${res === 'fail'
-                                      ? 'bg-rose-600 text-white shadow-sm'
+                                    title="Fail (Defect Flagged)"
+                                    className={`px-2 py-1 text-xs font-bold rounded-md flex items-center gap-1 transition cursor-pointer disabled:cursor-not-allowed ${res === 'fail'
+                                      ? 'bg-rose-600 text-white shadow-sm ring-1 ring-rose-700/20'
                                       : 'text-slate-600 hover:text-rose-700 hover:bg-white'
                                       }`}
                                   >
-                                    <X className="w-3.5 h-3.5" />
-                                    <span>Defect</span>
+                                    <X className="w-3.5 h-3.5 stroke-[2.5]" />
+                                    <span>Fail</span>
                                   </button>
 
                                   {/* N/A */}
@@ -1559,7 +1918,7 @@ export const InspectionForm: React.FC = () => {
                       <input
                         id="manual-date-input"
                         type="date"
-                        disabled={!isAdmin && ((user?.role === 'rpm' && isSubmitted) || isVerified)}
+                        disabled={isAdmin || ((user?.role === 'rpm' && isSubmitted) || isVerified)}
                         value={formatDateForInput(selectedDate)}
                         onChange={(e) => {
                           const newDate = e.target.value;
@@ -1583,7 +1942,7 @@ export const InspectionForm: React.FC = () => {
                     </label>
                     <select
                       id="quarter-select-input"
-                      disabled={!isAdmin && ((user?.role === 'rpm' && isSubmitted) || isVerified)}
+                      disabled={isAdmin || ((user?.role === 'rpm' && isSubmitted) || isVerified)}
                       value={selectedQuarter}
                       onChange={(e) => {
                         setSelectedQuarter(e.target.value);
@@ -1613,7 +1972,7 @@ export const InspectionForm: React.FC = () => {
                   <input
                     id="maintenance-carried-by-input"
                     type="text"
-                    disabled={!isAdmin && (isSubmitted || isVerified || user?.role === 'inspector')}
+                    disabled={isAdmin || isSubmitted || isVerified || user?.role === 'inspector'}
                     value={maintenanceCarriedBy}
                     onChange={(e) => {
                       setMaintenanceCarriedBy(e.target.value);
@@ -1639,7 +1998,7 @@ export const InspectionForm: React.FC = () => {
                   )}
                 </div>
 
-                {!isAdmin && (user?.role === 'inspector' || isSubmitted || isVerified) ? (
+                {(isAdmin || user?.role === 'inspector' || isSubmitted || isVerified) ? (
                   <div className="text-center text-[11px] text-emerald-700 font-semibold mt-1">
                     ✓ Attached Technician Signature
                   </div>
@@ -1661,9 +2020,8 @@ export const InspectionForm: React.FC = () => {
 
               {/* CARD 3: Inspected By (Inspector Role) */}
               <div
-                className={`p-4 rounded-xl border-2 flex flex-col justify-between space-y-3 ${
-                  user?.role === 'inspector' ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 bg-slate-50'
-                }`}
+                className={`p-4 rounded-xl border-2 flex flex-col justify-between space-y-3 ${user?.role === 'inspector' ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 bg-slate-50'
+                  }`}
               >
                 <div>
                   <label htmlFor="inspected-by-input" className="text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5 flex items-center justify-between">
@@ -1675,7 +2033,7 @@ export const InspectionForm: React.FC = () => {
                   <input
                     id="inspected-by-input"
                     type="text"
-                    disabled={!isAdmin && (user?.role === 'rpm' || isVerified)}
+                    disabled={isAdmin || user?.role === 'rpm' || isVerified}
                     value={inspectedBy}
                     onChange={(e) => {
                       setInspectedBy(e.target.value);
@@ -1701,7 +2059,7 @@ export const InspectionForm: React.FC = () => {
                   )}
                 </div>
 
-                {isAdmin || (user?.role === 'inspector' && !isVerified) ? (
+                {!isAdmin && user?.role === 'inspector' && !isVerified ? (
                   <div className="mt-1 print:hidden">
                     <SignatureSelector
                       label="Inspector Signature Picture *"
@@ -1730,10 +2088,17 @@ export const InspectionForm: React.FC = () => {
           >
             <div className="text-xs text-slate-600">
               {isVerified ? (
-                <span className="text-emerald-700 font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Inspection Officially Verified by Inspector. Both RPM and Inspection documents recorded.</span>
-                </span>
+                inspectionStatus === 'Rejected' ? (
+                  <span className="text-rose-700 font-bold flex items-center gap-1.5">
+                    <X className="w-4 h-4 text-rose-600 stroke-[2.5]" />
+                    <span>Inspection Rejected by Inspector. Status showcased as Rejected on Dashboard.</span>
+                  </span>
+                ) : (
+                  <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Inspection Accepted by Inspector. Status showcased as Accepted on Dashboard.</span>
+                  </span>
+                )
               ) : isSubmitted ? (
                 <span className="text-blue-700 font-semibold flex items-center gap-1.5">
                   <Clock className="w-4 h-4 text-blue-600" />
@@ -1748,86 +2113,147 @@ export const InspectionForm: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-              {/* ADMIN ACTIONS */}
+              {/* ADMIN ACTIONS (View-Only Mode) */}
               {user?.role === 'admin' && (
                 <>
-                  <button
-                    type="button"
-                    onClick={handleAdminSave}
-                    disabled={isSavingDropbox}
-                    className="py-3 px-5 rounded-xl text-xs font-bold bg-purple-900 hover:bg-purple-800 text-white flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
-                  >
-                    {isSavingDropbox ? (
-                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                    ) : (
-                      <ShieldCheck className="w-4 h-4 text-amber-400" />
-                    )}
-                    <span>{isSavingDropbox ? 'Replacing in Dropbox...' : 'Save & Replace Form (Admin)'}</span>
-                  </button>
+                  <span className="text-xs font-bold text-purple-900 bg-purple-100 px-3 py-2 rounded-xl flex items-center gap-1.5 border border-purple-200">
+                    <ShieldCheck className="w-4 h-4 text-purple-700" />
+                    <span>Admin: View-Only</span>
+                  </span>
                   <button
                     type="button"
                     onClick={() => handleDownloadPdf('RPM')}
-                    className="py-3 px-3.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer"
-                    title="Download RPM_{room}_{date}.pdf"
+                    disabled={isDownloading}
+                    className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-60"
+                    title="Download RPM PDF from Dropbox"
                   >
-                    <FileDown className="w-4 h-4 text-amber-400" />
-                    <span>RPM PDF</span>
+                    {isDownloading ? (
+                      <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                    ) : (
+                      <FileDown className="w-4 h-4 text-amber-400" />
+                    )}
+                    <span>Download RPM PDF</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDownloadPdf('Inspection')}
-                    className="py-3 px-3.5 rounded-xl text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white flex items-center gap-1.5 shadow cursor-pointer"
-                    title="Download Inspection_{room}_{date}.pdf (Dual Remarks)"
+                    disabled={isDownloading}
+                    className="py-2.5 px-4 rounded-xl text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-60"
+                    title="Download Inspection PDF from Dropbox"
                   >
-                    <FileDown className="w-4 h-4 text-emerald-400" />
-                    <span>Inspection PDF</span>
+                    {isDownloading ? (
+                      <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                    ) : (
+                      <FileDown className="w-4 h-4 text-emerald-400" />
+                    )}
+                    <span>Download Inspection PDF</span>
                   </button>
                 </>
               )}
 
-              {/* INSPECTOR ACTIONS */}
+              {/* INSPECTOR ACTIONS: ACCEPT OR REJECT BUTTONS */}
               {user?.role === 'inspector' && (
                 <>
-                  {!isVerified ? (
-                    <button
-                      type="button"
-                      onClick={handleInspectorSubmit}
-                      disabled={isSavingDropbox}
-                      className="py-3.5 px-6 rounded-xl text-sm font-extrabold bg-blue-700 hover:bg-blue-600 text-white flex items-center justify-center gap-2 shadow-lg shadow-blue-700/20 transition cursor-pointer active:scale-95 disabled:opacity-60"
-                    >
-                      {isSavingDropbox ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                          <span>Saving to Dropbox...</span>
-                        </>
-                      ) : (
-                        <>
-                          <ClipboardCheck className="w-4 h-4 text-amber-300" />
-                          <span>Verify & Submit Inspection Sign-off</span>
-                        </>
-                      )}
-                    </button>
+                  {!isSubmitted ? (
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-800 bg-amber-50 px-4 py-2.5 rounded-xl border border-amber-300 shadow-sm">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                      <span>Awaiting RPM technician submission. Inspectors can only inspect forms that have already been submitted.</span>
+                    </div>
+                  ) : !isVerified ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* ACCEPT BUTTON */}
+                      <button
+                        type="button"
+                        id="inspector-accept-button"
+                        onClick={() => handleInspectorSubmit('Accepted')}
+                        disabled={isSavingDropbox}
+                        className="py-3.5 px-6 rounded-xl text-sm font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition cursor-pointer active:scale-95 disabled:opacity-60"
+                        title="Accept this room inspection (updates status to Accepted on Dashboard)"
+                      >
+                        {isSavingDropbox ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                            <span>Processing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5 text-white stroke-[2.5]" />
+                            <span>Accept</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* REJECT BUTTON */}
+                      <button
+                        type="button"
+                        id="inspector-reject-button"
+                        onClick={() => handleInspectorSubmit('Rejected')}
+                        disabled={isSavingDropbox}
+                        className="py-3.5 px-6 rounded-xl text-sm font-extrabold bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition cursor-pointer active:scale-95 disabled:opacity-60"
+                        title="Reject this room inspection (updates status to Rejected on Dashboard)"
+                      >
+                        {isSavingDropbox ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                            <span>Processing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <X className="w-5 h-5 text-white stroke-[2.5]" />
+                            <span>Reject</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   ) : (
-                    <>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span
+                        className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border shadow-sm ${inspectionStatus === 'Rejected'
+                            ? 'bg-rose-100 text-rose-800 border-rose-300'
+                            : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          }`}
+                      >
+                        {inspectionStatus === 'Rejected' ? (
+                          <>
+                            <X className="w-4 h-4 text-rose-600 stroke-[3]" />
+                            <span>Status: Rejected</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-600 stroke-[3]" />
+                            <span>Status: Accepted</span>
+                          </>
+                        )}
+                      </span>
                       <button
                         type="button"
                         onClick={() => handleDownloadPdf('Inspection')}
-                        className="py-3 px-4 rounded-xl text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white flex items-center gap-1.5 shadow cursor-pointer"
-                        title="Download Inspection_{room}_{date}.pdf"
+                        disabled={isDownloading}
+                        className="py-3 px-4 rounded-xl text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-60"
+                        title="Download Inspection PDF from Dropbox"
                       >
-                        <FileDown className="w-4 h-4 text-emerald-400" />
+                        {isDownloading ? (
+                          <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                        ) : (
+                          <FileDown className="w-4 h-4 text-emerald-400" />
+                        )}
                         <span>Download Inspection PDF</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => handleDownloadPdf('RPM')}
-                        className="py-3 px-3 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer"
-                        title="Download RPM_{room}_{date}.pdf"
+                        disabled={isDownloading}
+                        className="py-3 px-3 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-60"
+                        title="Download RPM PDF from Dropbox"
                       >
-                        <FileDown className="w-4 h-4 text-amber-400" />
+                        {isDownloading ? (
+                          <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                        ) : (
+                          <FileDown className="w-4 h-4 text-amber-400" />
+                        )}
                         <span>Download RPM PDF</span>
                       </button>
-                    </>
+                    </div>
                   )}
                 </>
               )}
@@ -1859,10 +2285,15 @@ export const InspectionForm: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleDownloadPdf('RPM')}
-                        className="py-3 px-4 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer"
-                        title="Download RPM_{room}_{date}.pdf"
+                        disabled={isDownloading}
+                        className="py-3 px-4 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 shadow cursor-pointer disabled:opacity-60"
+                        title="Download RPM PDF from Dropbox"
                       >
-                        <FileDown className="w-4 h-4 text-amber-400" />
+                        {isDownloading ? (
+                          <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                        ) : (
+                          <FileDown className="w-4 h-4 text-amber-400" />
+                        )}
                         <span>Download RPM PDF</span>
                       </button>
                       <button
@@ -1892,6 +2323,9 @@ export const InspectionForm: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Website Custom Modal Dialog (Form submission, Duplicated warning, confirmations) */}
+      {appModal && <AppModal {...appModal} />}
     </div>
   );
 };

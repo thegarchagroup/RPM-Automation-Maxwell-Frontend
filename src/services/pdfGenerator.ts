@@ -54,6 +54,9 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
   const maintenancePerson = maintenanceCarriedBy || inspectorName || 'Maintenance Staff';
   const inspectorPerson = inspectedByName || verifiedByName || 'Not Specified';
   const officialInspectDate = inspectedAt || verifiedAt || inspectionDate;
+  const statusUpper = (status || '').toUpperCase();
+  const isRejected = statusUpper.includes('REJECT');
+  const isAccepted = statusUpper.includes('ACCEPT') || statusUpper === 'VERIFIED';
 
   // Inspection PDF is landscape by default to accommodate both RPM and Inspector remarks cleanly
   const isLandscape = orientation ? orientation === 'landscape' : documentType === 'Inspection';
@@ -89,9 +92,20 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     : 'ROOM PREVENTIVE MAINTENANCE INSPECTION REPORT';
   doc.text(subTitle, pageWidth / 2, currentY + 13, { align: 'center' });
 
-  currentY += 22;
+  currentY += 21;
 
   // Metadata Table (Type, Room, Date, Quarter, Status)
+  const statusDisplay = isRejected
+    ? 'REJECTED'
+    : isAccepted
+      ? 'ACCEPTED'
+      : status.toUpperCase();
+  const statusTextColor: [number, number, number] = isRejected
+    ? [225, 29, 72]
+    : isAccepted
+      ? [16, 185, 129]
+      : [15, 23, 42];
+
   autoTable(doc, {
     startY: currentY,
     margin: { left: margin, right: margin },
@@ -108,7 +122,7 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
         { content: 'Inspection Date:', styles: { fontStyle: 'bold', fillColor: [241, 245, 249], textColor: [51, 65, 85] } },
         { content: inspectionDate || new Date().toLocaleDateString(), styles: { textColor: [15, 23, 42] } },
         { content: 'Schedule Quarter:', styles: { fontStyle: 'bold', fillColor: [241, 245, 249], textColor: [51, 65, 85] } },
-        { content: `${quarter || '2nd Quarter (May - August)'} (${status.toUpperCase()})`, styles: { fontStyle: 'bold', textColor: [15, 23, 42] } },
+        { content: `${quarter || 'Schedule Quarter'} | ${statusDisplay}`, styles: { fontStyle: 'bold', textColor: statusTextColor } },
       ],
     ],
     styles: {
@@ -119,20 +133,48 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     },
     columnStyles: isLandscape
       ? {
-          0: { cellWidth: 35 },
-          1: { cellWidth: (contentWidth - 70) / 2 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: (contentWidth - 70) / 2 },
-        }
+        0: { cellWidth: 35 },
+        1: { cellWidth: (contentWidth - 70) / 2 },
+        2: { cellWidth: 35 },
+        3: { cellWidth: (contentWidth - 70) / 2 },
+      }
       : {
-          0: { cellWidth: 32 },
-          1: { cellWidth: 61 },
-          2: { cellWidth: 32 },
-          3: { cellWidth: 61 },
-        },
+        0: { cellWidth: 32 },
+        1: { cellWidth: 61 },
+        2: { cellWidth: 32 },
+        3: { cellWidth: 61 },
+      },
   });
 
-  currentY = (doc as any).lastAutoTable.finalY + 4;
+  currentY = (doc as any).lastAutoTable.finalY + 3;
+
+  // Decision Status Banner (Just 'REJECTED' or 'ACCEPTED')
+  if (isLandscape && (isAccepted || isRejected)) {
+    const bannerText = isRejected ? 'REJECTED' : 'ACCEPTED';
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: margin, right: margin },
+      theme: 'grid',
+      body: [
+        [
+          {
+            content: bannerText,
+            styles: {
+              fillColor: isRejected ? [254, 242, 242] : [240, 253, 244],
+              textColor: isRejected ? [225, 29, 72] : [16, 185, 129],
+              fontStyle: 'bold',
+              fontSize: 9,
+              halign: 'center',
+              cellPadding: 2.2,
+              lineColor: isRejected ? [239, 68, 68] : [34, 197, 94],
+              lineWidth: 0.35,
+            },
+          },
+        ],
+      ],
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 3;
+  }
 
   // Summary Metrics Bar
   let totalItems = 0;
@@ -153,6 +195,7 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
   const answeredCount = passCount + failCount + naCount;
   const passRate = answeredCount > 0 ? Math.round((passCount / (passCount + failCount || 1)) * 100) : 0;
 
+  const resultSummaryTag = isRejected ? ' | DECISION: REJECTED' : isAccepted ? ' | DECISION: ACCEPTED' : '';
   autoTable(doc, {
     startY: currentY,
     margin: { left: margin, right: margin },
@@ -160,23 +203,74 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     body: [
       [
         {
-          content: `Total Items: ${totalItems}   |   Checked: ${answeredCount}   |   Pass: ${passCount}   |   Defects/Fail: ${failCount}   |   Pass Rate: ${passRate}%`,
+          content: `Total Items: ${totalItems}   |   Checked: ${answeredCount}   |   Pass: ${passCount}   |   Defects/Fail: ${failCount}   |   Pass Rate: ${passRate}%${resultSummaryTag}`,
           styles: {
-            fillColor: [248, 250, 252],
-            textColor: failCount > 0 ? [185, 28, 28] : [22, 101, 52],
+            fillColor: isRejected ? [254, 242, 242] : isAccepted ? [240, 253, 244] : [248, 250, 252],
+            textColor: isRejected ? [185, 28, 28] : isAccepted ? [22, 101, 52] : (failCount > 0 ? [185, 28, 28] : [22, 101, 52]),
             fontStyle: 'bold',
             fontSize: 8,
             halign: 'center',
-            cellPadding: 2,
-            lineColor: [226, 232, 240],
-            lineWidth: 0.2,
+            cellPadding: 2.2,
+            lineColor: isRejected ? [254, 202, 202] : isAccepted ? [187, 247, 208] : [226, 232, 240],
+            lineWidth: 0.25,
           },
         },
       ],
     ],
   });
 
-  currentY = (doc as any).lastAutoTable.finalY + 4;
+  currentY = (doc as any).lastAutoTable.finalY + 3.5;
+
+  // Dedicated Decision Notice & Corrective Action Box
+  if (isLandscape && (isRejected || isAccepted)) {
+    if (isRejected) {
+      autoTable(doc, {
+        startY: currentY,
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        body: [
+          [
+            {
+              content: `INSPECTION REJECTED — CORRECTIVE ACTION REQUIRED:\nThis inspection has been REJECTED by Inspector ${inspectorPerson}. ${failCount} defect(s) flagged during verification.\nInspector Remarks: "${inspectorRemark || 'Flagged defects must be rectified and re-inspected.'}"`,
+              styles: {
+                fillColor: [254, 242, 242],
+                textColor: [185, 28, 28],
+                fontStyle: 'bold',
+                fontSize: 7.5,
+                cellPadding: 2.5,
+                lineColor: [239, 68, 68],
+                lineWidth: 0.35,
+              },
+            },
+          ],
+        ],
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 4;
+    } else if (isAccepted) {
+      autoTable(doc, {
+        startY: currentY,
+        margin: { left: margin, right: margin },
+        theme: 'grid',
+        body: [
+          [
+            {
+              content: `INSPECTION ACCEPTED — VERIFICATION CLEARANCE:\nThis guest room has been inspected by Inspector ${inspectorPerson} and officially ACCEPTED.\nInspector Remarks: "${inspectorRemark || 'Inspection satisfactory. Room cleared for guest occupancy.'}"`,
+              styles: {
+                fillColor: [240, 253, 244],
+                textColor: [22, 101, 52],
+                fontStyle: 'bold',
+                fontSize: 7.5,
+                cellPadding: 2.5,
+                lineColor: [34, 197, 94],
+                lineWidth: 0.35,
+              },
+            },
+          ],
+        ],
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 4;
+    }
+  }
 
   // Render Checklist Sections
   sections.forEach((section) => {
@@ -246,48 +340,48 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
       theme: 'grid',
       head: isLandscape
         ? [
-            [
-              {
-                content: `${section.code}. ${section.title}`,
-                colSpan: 5,
-                styles: {
-                  fillColor: [30, 41, 59], // slate-800
-                  textColor: [255, 255, 255],
-                  fontStyle: 'bold',
-                  fontSize: 8.5,
-                  cellPadding: 2,
-                },
+          [
+            {
+              content: `${section.code}. ${section.title}`,
+              colSpan: 5,
+              styles: {
+                fillColor: [30, 41, 59], // slate-800
+                textColor: [255, 255, 255],
+                fontStyle: 'bold',
+                fontSize: 8.5,
+                cellPadding: 2,
               },
-            ],
-            [
-              { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-              { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-              { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-              { content: 'RPM Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-              { content: 'Inspector Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-            ],
-          ]
-        : [
-            [
-              {
-                content: `${section.code}. ${section.title}`,
-                colSpan: 4,
-                styles: {
-                  fillColor: [30, 41, 59],
-                  textColor: [255, 255, 255],
-                  fontStyle: 'bold',
-                  fontSize: 8.5,
-                  cellPadding: 2,
-                },
-              },
-            ],
-            [
-              { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-              { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-              { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
-              { content: 'Remarks / Defect Details', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
-            ],
+            },
           ],
+          [
+            { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+            { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+            { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+            { content: 'RPM Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+            { content: 'Inspector Remarks', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+          ],
+        ]
+        : [
+          [
+            {
+              content: `${section.code}. ${section.title}`,
+              colSpan: 4,
+              styles: {
+                fillColor: [30, 41, 59],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold',
+                fontSize: 8.5,
+                cellPadding: 2,
+              },
+            },
+          ],
+          [
+            { content: '#', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+            { content: 'Checklist Item', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+            { content: 'Result', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', halign: 'center', textColor: [51, 65, 85] } },
+            { content: 'Remarks / Defect Details', styles: { fillColor: [241, 245, 249], fontStyle: 'bold', textColor: [51, 65, 85] } },
+          ],
+        ],
       body: tableBody,
       styles: {
         fontSize: 7.5,
@@ -298,18 +392,18 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
       },
       columnStyles: isLandscape
         ? {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 105 },
-            2: { cellWidth: 24 },
-            3: { cellWidth: 67 },
-            4: { cellWidth: 67 },
-          }
+          0: { cellWidth: 10 },
+          1: { cellWidth: 105 },
+          2: { cellWidth: 24 },
+          3: { cellWidth: 67 },
+          4: { cellWidth: 67 },
+        }
         : {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 95 },
-            2: { cellWidth: 20 },
-            3: { cellWidth: 61 },
-          },
+          0: { cellWidth: 10 },
+          1: { cellWidth: 95 },
+          2: { cellWidth: 20 },
+          3: { cellWidth: 61 },
+        },
       pageBreak: 'auto',
     });
 
@@ -427,15 +521,15 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
     },
     columnStyles: isLandscape
       ? {
-          0: { cellWidth: 65 },
-          1: { cellWidth: (contentWidth - 65) / 2 },
-          2: { cellWidth: (contentWidth - 65) / 2 },
-        }
+        0: { cellWidth: 65 },
+        1: { cellWidth: (contentWidth - 65) / 2 },
+        2: { cellWidth: (contentWidth - 65) / 2 },
+      }
       : {
-          0: { cellWidth: 55 },
-          1: { cellWidth: 76 },
-          2: { cellWidth: 55 },
-        },
+        0: { cellWidth: 55 },
+        1: { cellWidth: 76 },
+        2: { cellWidth: 55 },
+      },
     didDrawCell: (data) => {
       if (data.section === 'body') {
         const cell = data.cell;
@@ -494,43 +588,121 @@ export function buildInspectionPdfDoc(options: GeneratePdfOptions): { doc: jsPDF
           doc.text(inspectorPerson || 'Not Specified', cell.x + 3, drawY + 2.5);
 
           doc.setFontSize(7);
-          doc.setFont('helvetica', 'normal');
-          doc.setTextColor(100, 116, 139);
-          if (hasSig) {
-            doc.text(`${officialInspectDate} • Verified`, cell.x + 3, drawY + 6.5);
+          if (isRejected) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(225, 29, 72);
+            doc.text(`[ REJECTED ] • ${officialInspectDate}`, cell.x + 3, drawY + 6.5);
+          } else if (isAccepted) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(16, 185, 129);
+            doc.text(`[ ACCEPTED ] • ${officialInspectDate}`, cell.x + 3, drawY + 6.5);
           } else {
-            doc.text(officialInspectDate, cell.x + 3, drawY + 6.5);
-            doc.text('Official Inspection Sign-off', cell.x + 3, drawY + 10);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(100, 116, 139);
+            doc.text(`${officialInspectDate} • Sign-off`, cell.x + 3, drawY + 6.5);
           }
         }
       }
     },
   });
 
-  // Add Page Numbers & Footers
+  // Add Page Numbers, Watermarks & Footers
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
+
+    // Subtle background watermark on each page according to decision
+    if (isLandscape) {
+      if (isRejected) {
+        doc.saveGraphicsState();
+        doc.setFontSize(42);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(254, 226, 226); // light rose red
+        doc.text('REJECTED', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 22 });
+        doc.restoreGraphicsState();
+      } else if (isAccepted) {
+        doc.saveGraphicsState();
+        doc.setFontSize(42);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(220, 252, 231); // light emerald green
+        doc.text('ACCEPTED', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 22 });
+        doc.restoreGraphicsState();
+      }
+    }
+
     doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
     doc.setTextColor(148, 163, 184); // slate-400
     doc.text(
-      `${currentProperty} • Room Preventive Maintenance Inspection • Room ${roomNumber}`,
+      `${currentProperty} • Room Preventive Maintenance • Room ${roomNumber} • ${isRejected ? 'DECISION: REJECTED' : isAccepted ? 'DECISION: ACCEPTED' : 'STATUS: ' + statusUpper}`,
       margin,
       pageHeight - 6
     );
     doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 6, { align: 'right' });
   }
 
+function formatFilenameDate(dateInput?: string): string {
+  if (!dateInput) {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    return `${dd}_${mm}_${yy}`;
+  }
+  // Try matching ISO format YYYY-MM-DD
+  const isoMatch = dateInput.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const [, yyyy, mm, dd] = isoMatch;
+    return `${dd}_${mm}_${yyyy.slice(-2)}`;
+  }
+  // Try Date parsing (e.g. "08 Oct 2026")
+  const d = new Date(dateInput);
+  if (!isNaN(d.getTime())) {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    return `${dd}_${mm}_${yy}`;
+  }
+  return dateInput.trim().replace(/[^a-zA-Z0-9]/g, '_');
+}
+
   const cleanRoom = roomNumber.replace(/Room\s*/i, '').trim().replace(/[^a-zA-Z0-9]/g, '');
-  const prefix = documentType === 'Inspection' ? 'Inspection' : 'RPM';
-  const cleanDate = (inspectionDate || new Date().toISOString().slice(0, 10)).trim().replace(/[^a-zA-Z0-9]/g, '_');
-  const safeFilename = `${prefix}_${cleanRoom}_${cleanDate}.pdf`;
+  const cleanDate = formatFilenameDate(inspectionDate);
+
+  let safeFilename = '';
+  if (documentType === 'Inspection') {
+    if (isRejected) {
+      safeFilename = `Inspection_REJECTED_${cleanRoom}_${cleanDate}.pdf`;
+    } else if (isAccepted) {
+      safeFilename = `Inspection_ACCEPTED_${cleanRoom}_${cleanDate}.pdf`;
+    } else {
+      safeFilename = `Inspection_${cleanRoom}_${cleanDate}.pdf`;
+    }
+  } else {
+    safeFilename = `RPM_${cleanRoom}_${cleanDate}.pdf`;
+  }
   return { doc, filename: safeFilename };
+}
+
+export function downloadPdfBlob(blob: Blob, filename: string): void {
+  const safeName = filename.endsWith('.pdf') ? filename : `${filename}.pdf`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.style.display = 'none';
+  link.href = url;
+  link.setAttribute('download', safeName);
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
 
 export function generateInspectionPdf(options: GeneratePdfOptions): void {
   const { doc, filename } = buildInspectionPdfDoc(options);
-  doc.save(filename);
+  const blob = doc.output('blob');
+  downloadPdfBlob(blob, filename);
 }
 
 export function getInspectionPdfBlob(options: GeneratePdfOptions): { blob: Blob; filename: string } {

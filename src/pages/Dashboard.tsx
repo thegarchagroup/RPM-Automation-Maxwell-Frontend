@@ -18,16 +18,17 @@ import {
   ShieldCheck,
   FileDown,
   ClipboardCheck,
-  Edit3,
   AlertTriangle,
   ChevronDown,
   ChevronUp,
   Bell,
+  Eye,
 } from 'lucide-react';
 
 // Static template matrix containing exact room layout and initial fallback
 import { RAW_CSV_ROWS, type RawCell } from '../data/rpmCsvData';
-import { MAXWELL_SECTIONS } from '../data/templateData';
+import maxwellInspectionData from '../data/Maxwell_Inspection_List.json';
+import { downloadPdfBlob } from '../services/pdfGenerator';
 
 interface TableCell {
   room: string;
@@ -66,7 +67,7 @@ export const Dashboard: React.FC = () => {
   const [selectedProperty, setSelectedProperty] = useState<string>('Maxwell');
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedQuarter, setSelectedQuarter] = useState<string>(currentQuarter);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'Done' | 'Pending'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Done' | 'Pending' | 'Accepted' | 'Rejected'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const [records, setRecords] = useState<RpmRecord[]>([]);
@@ -162,10 +163,10 @@ export const Dashboard: React.FC = () => {
         });
 
         if (matched) {
-          const isDone = matched.inspection_status === 'Done';
           const rpmDate = matched.rpm_date || matched.eng_date || '';
           const inspectionDate = matched.inspection_date || '';
-          const status = isDone ? 'Done' : (rpmDate ? 'Pending' : (matched.inspection_status || ''));
+          const rawStatus = matched.inspection_status || '';
+          const status = rawStatus || (rpmDate ? 'Pending' : '');
 
           return {
             room: matched.room_or_area,
@@ -240,16 +241,28 @@ export const Dashboard: React.FC = () => {
 
   const blockColSpan = isAdmin ? 5 : 4;
 
-  // Checklist item description lookup
+  // Template sections loaded directly from Maxwell_Inspection_List.json
+  const [templateSections, setTemplateSections] = useState<any[]>(
+    (maxwellInspectionData.sections as any[]) || []
+  );
+
+  useEffect(() => {
+    // Background refresh if API has any updates
+    api.getTemplate().then((data) => {
+      if (data?.sections) setTemplateSections(data.sections);
+    }).catch(() => {});
+  }, []);
+
+  // Checklist item description lookup from live template
   const itemDescMap = useMemo(() => {
     const map: Record<number, string> = {};
-    MAXWELL_SECTIONS.forEach((s) => {
-      s.items.forEach((it) => {
+    templateSections.forEach((s) => {
+      s.items?.forEach((it: any) => {
         map[it.id] = it.description;
       });
     });
     return map;
-  }, []);
+  }, [templateSections]);
 
   // Room defects map for badge display in table
   const roomDefectsMap = useMemo(() => {
@@ -271,14 +284,22 @@ export const Dashboard: React.FC = () => {
     return map;
   }, [defectiveInspections]);
 
-  const handleOpenForm = (roomName: string) => {
+  const handleOpenForm = (roomName: string, rpmDate?: string) => {
+    if ((isInspector || isAdmin) && rpmDate !== undefined && !rpmDate) {
+      showToast(`${isAdmin ? 'Admin' : 'Inspectors'} can only view forms that have an RPM date. Room ${roomName} has no RPM submission yet.`, 'info');
+      return;
+    }
     const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
     navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}`);
   };
 
-  const handleAdminEdit = (roomName: string) => {
+  const handleAdminView = (roomName: string, rpmDate?: string) => {
+    if (!rpmDate) {
+      showToast(`Admin can only view forms that have been submitted by RPM and have an RPM date. Room ${roomName} has no RPM submission yet.`, 'info');
+      return;
+    }
     const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
-    navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}&edit=true`);
+    navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}`);
   };
 
   // Search match helper
@@ -436,54 +457,99 @@ export const Dashboard: React.FC = () => {
   // Helper renderer for modern status badge
   const renderInspectionBadge = (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader || !cell.status) return null;
-    const isDone = cell.status === 'Done';
+    const s = cell.status;
 
-    if (user?.role === 'inspector' && !isDone) {
+    if (s === 'Accepted') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-sm"
+          title={`Room ${cell.room} inspection Accepted by Inspector`}
+        >
+          <Check className="w-3 h-3 text-emerald-700 stroke-[3]" />
+          <span>Accepted</span>
+        </span>
+      );
+    }
+
+    if (s === 'Rejected') {
       return (
         <button
           type="button"
-          onClick={() => handleOpenForm(cell.room)}
-          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-300 transition cursor-pointer shadow-sm animate-pulse"
-          title={`Inspect ${cell.room}`}
+          onClick={() => handleOpenForm(cell.room, cell.rpm)}
+          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 transition cursor-pointer shadow-sm group"
+          title={`Room ${cell.room} inspection was Rejected. Click to review or re-inspect.`}
         >
-          <ClipboardCheck className="w-3 h-3 text-blue-700" />
-          <span>Inspect</span>
+          <X className="w-3 h-3 text-rose-700 stroke-[3]" />
+          <span>Rejected</span>
         </button>
       );
     }
 
+    // For Inspector role: can inspect if room has an RPM date
+    if (user?.role === 'inspector') {
+      if (cell.rpm) {
+        return (
+          <button
+            type="button"
+            onClick={() => handleOpenForm(cell.room, cell.rpm)}
+            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 hover:bg-blue-200 text-blue-900 border border-blue-300 transition cursor-pointer shadow-sm animate-pulse"
+            title={`Inspect ${cell.room} (RPM completed on ${cell.rpm})`}
+          >
+            <ClipboardCheck className="w-3 h-3 text-blue-700" />
+            <span>Inspect</span>
+          </button>
+        );
+      }
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+          title={`Room ${cell.room} has no RPM date yet. Inspectors can only inspect forms that have an RPM date.`}
+        >
+          <span>Pending RPM</span>
+        </span>
+      );
+    }
+
+    if (s === 'Done') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-400/90 text-slate-950 shadow-sm ring-1 ring-amber-500/30"
+        >
+          <Check className="w-3 h-3 stroke-[3]" />
+          <span>Done</span>
+        </span>
+      );
+    }
+
     return (
-      <span
-        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold select-none ${
-          isDone
-            ? 'bg-amber-400/90 text-slate-950 shadow-sm ring-1 ring-amber-500/30'
-            : 'bg-slate-100 text-slate-400 border border-slate-200'
-        }`}
-      >
-        {isDone ? (
-          <>
-            <Check className="w-3 h-3 stroke-[3]" />
-            <span>Done</span>
-          </>
-        ) : (
-          <span>Pending</span>
-        )}
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-400 border border-slate-200">
+        <span>Pending</span>
       </span>
     );
   };
 
-  // Helper renderer for Admin Show button (opens form in edit mode)
+  // Helper renderer for Admin View button (opens submitted form in read-only mode)
   const renderShowButton = (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader) return null;
+    if (!cell.rpm) {
+      return (
+        <span
+          className="text-slate-300 text-xs font-semibold cursor-not-allowed select-none"
+          title={`Room ${cell.room} has no RPM submission yet. Admin can only view forms that have an RPM date.`}
+        >
+          —
+        </span>
+      );
+    }
     return (
       <button
         type="button"
-        onClick={() => handleAdminEdit(cell.room)}
+        onClick={() => handleAdminView(cell.room, cell.rpm)}
         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition cursor-pointer shadow-sm active:scale-95"
-        title={`Open Room ${cell.room} in edit mode`}
+        title={`View submitted form for Room ${cell.room} (Read-Only)`}
       >
-        <Edit3 className="w-3 h-3 text-purple-700" />
-        <span>Show</span>
+        <Eye className="w-3 h-3 text-purple-700" />
+        <span>View</span>
       </button>
     );
   };
@@ -496,15 +562,28 @@ export const Dashboard: React.FC = () => {
     const cleanRoom = cell.room.toLowerCase().replace(/room\s*/i, '').trim();
     const defectInfo = (isAdmin || isInspector) ? roomDefectsMap[cleanRoom] : null;
 
+    // Inspector and Admin can only open forms that have an RPM date
+    if ((isInspector || isAdmin) && !cell.rpm) {
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 font-bold text-xs text-slate-400 cursor-not-allowed rounded px-1 py-0.5 ${
+            isMatched ? 'bg-amber-100 text-slate-600' : ''
+          }`}
+          title={`Room ${cell.room} has no RPM date. ${isAdmin ? 'Admin' : 'Inspector'} can only view forms that have an RPM date.`}
+        >
+          <span>{cell.room}</span>
+        </span>
+      );
+    }
+
     return (
       <button
         type="button"
-        onClick={() => handleOpenForm(cell.room)}
-        className={`group inline-flex items-center gap-1.5 font-bold text-xs transition-colors cursor-pointer rounded px-1 py-0.5 ${
-          isMatched
+        onClick={() => handleOpenForm(cell.room, cell.rpm)}
+        className={`group inline-flex items-center gap-1.5 font-bold text-xs transition-colors cursor-pointer rounded px-1 py-0.5 ${isMatched
             ? 'bg-amber-200/90 text-slate-950 ring-2 ring-amber-400'
             : 'text-slate-800 hover:text-blue-600'
-        }`}
+          }`}
         title={`Inspect ${cell.room}${defectInfo ? ` (${defectInfo.count} defect(s) flagged)` : ''}`}
       >
         <span>{cell.room}</span>
@@ -522,30 +601,59 @@ export const Dashboard: React.FC = () => {
     );
   };
 
-  // Helper renderer for date badge
-  const renderDateBadge = (dateStr: string) => {
-    if (!dateStr) return <span className="text-slate-300 text-[11px]">—</span>;
+  // Download RPM PDF from Dropbox
+  const handleDownloadRpmPdf = async (cell: TableCell) => {
+    if (!cell.rpm || !cell.room) return;
+    try {
+      showToast(`Fetching RPM PDF for ${cell.room}...`, 'info');
+      const { blob, filename } = await api.downloadDropboxPdf({
+        room_number: cell.room,
+        inspection_date: cell.rpm,
+        year: selectedYear,
+        quarter: selectedQuarter,
+        document_type: 'RPM',
+      });
+      downloadPdfBlob(blob, filename);
+      showToast(`Downloaded ${filename}`, 'info');
+    } catch (err: any) {
+      showToast(`RPM PDF not found in Dropbox: ${err.message || 'File may not exist'}`, 'info');
+    }
+  };
+
+  // Render clickable RPM date that downloads RPM PDF from Dropbox
+  const renderRpmDate = (cell: TableCell) => {
+    if (!cell.rpm) return <span className="text-slate-300 text-[11px]">—</span>;
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-        {dateStr}
-      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleDownloadRpmPdf(cell);
+        }}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 hover:bg-emerald-100 hover:border-emerald-300 transition cursor-pointer group"
+        title={`Download RPM PDF for ${cell.room}`}
+      >
+        <FileDown className="w-3 h-3 text-emerald-500 group-hover:text-emerald-700 transition" />
+        <span>{cell.rpm}</span>
+      </button>
     );
   };
+
 
   // Download inspection PDF from Dropbox
   const handleDownloadInspectionPdf = async (cell: TableCell) => {
     if (!cell.inspection || !cell.room) return;
     try {
       showToast(`Fetching PDF for ${cell.room}...`, 'info');
-      const result = await api.getDropboxDownloadLink({
+      const { blob, filename } = await api.downloadDropboxPdf({
         room_number: cell.room,
         inspection_date: cell.inspection,
         year: selectedYear,
         quarter: selectedQuarter,
+        document_type: 'Inspection',
       });
-      if (result.download_url) {
-        window.open(result.download_url, '_blank');
-      }
+      downloadPdfBlob(blob, filename);
+      showToast(`Downloaded ${filename}`, 'info');
     } catch (err: any) {
       showToast(`PDF not found: ${err.message || 'File may not exist in Dropbox'}`, 'info');
     }
@@ -656,7 +764,9 @@ export const Dashboard: React.FC = () => {
                 className="py-2 px-3 rounded-xl text-xs font-bold bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer shadow-sm transition"
               >
                 <option value="all">All Statuses</option>
-                <option value="Done">Completed (Done)</option>
+                <option value="Accepted">Accepted Only</option>
+                <option value="Rejected">Rejected Only</option>
+                <option value="Done">Completed (Done / Accepted)</option>
                 <option value="Pending">Pending Only</option>
               </select>
             </div>
@@ -717,15 +827,17 @@ export const Dashboard: React.FC = () => {
               <span>Download CSV</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => navigate(`/form?property=${encodeURIComponent(selectedProperty)}`)}
-              className="py-2.5 px-4 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
-              title="Open digital inspection checklist form"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Checklist Form</span>
-            </button>
+            {!isInspector && !isAdmin && (
+              <button
+                type="button"
+                onClick={() => navigate(`/form?property=${encodeURIComponent(selectedProperty)}`)}
+                className="py-2.5 px-4 rounded-xl text-xs font-extrabold bg-amber-400 hover:bg-amber-300 text-slate-950 flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
+                title="Open digital inspection checklist form"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Checklist Form</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -786,11 +898,10 @@ export const Dashboard: React.FC = () => {
                     key={insp.id}
                     type="button"
                     onClick={() => handleOpenForm(insp.room_number)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer border hover:scale-105 active:scale-95 ${
-                      isVerified
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer border hover:scale-105 active:scale-95 ${isVerified
                         ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
                         : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-700'
-                    }`}
+                      }`}
                     title={`Open Room ${insp.room_number} form`}
                   >
                     <span>Room {insp.room_number}</span>
@@ -883,233 +994,233 @@ export const Dashboard: React.FC = () => {
           </div>
         ) : (
           <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse min-w-[1360px]">
-              {/* Level Sector Super-Headers */}
-              <thead>
-                <tr className="bg-slate-900 text-white text-xs font-bold border-b border-slate-800">
-                  {/* Block 1 Header */}
-                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-amber-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Level 1 & Public Areas</span>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse min-w-[1360px]">
+                {/* Level Sector Super-Headers */}
+                <thead>
+                  <tr className="bg-slate-900 text-white text-xs font-bold border-b border-slate-800">
+                    {/* Block 1 Header */}
+                    <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-amber-400"></div>
+                          <span className="font-extrabold tracking-wide uppercase">Level 1 & Public Areas</span>
+                        </div>
+                        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
+                          13 Units + Areas
+                        </span>
                       </div>
-                      <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
-                        13 Units + Areas
-                      </span>
-                    </div>
-                  </th>
+                    </th>
 
-                  {/* Block 2 Header */}
-                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-blue-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Level 2</span>
+                    {/* Block 2 Header */}
+                    <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-blue-400"></div>
+                          <span className="font-extrabold tracking-wide uppercase">Level 2</span>
+                        </div>
+                        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
+                          26 Rooms
+                        </span>
                       </div>
-                      <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
-                        26 Rooms
-                      </span>
-                    </div>
-                  </th>
+                    </th>
 
-                  {/* Block 3 Header */}
-                  <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-indigo-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Level 3</span>
+                    {/* Block 3 Header */}
+                    <th colSpan={blockColSpan} className="py-3 px-4 border-r border-slate-800 w-[25%]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-indigo-400"></div>
+                          <span className="font-extrabold tracking-wide uppercase">Level 3</span>
+                        </div>
+                        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
+                          26 Rooms
+                        </span>
                       </div>
-                      <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
-                        26 Rooms
-                      </span>
-                    </div>
-                  </th>
+                    </th>
 
-                  {/* Block 4 Header */}
-                  <th colSpan={blockColSpan} className="py-3 px-4 w-[25%]">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-400"></div>
-                        <span className="font-extrabold tracking-wide uppercase">Level 4</span>
+                    {/* Block 4 Header */}
+                    <th colSpan={blockColSpan} className="py-3 px-4 w-[25%]">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400"></div>
+                          <span className="font-extrabold tracking-wide uppercase">Level 4</span>
+                        </div>
+                        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
+                          14 Rooms
+                        </span>
                       </div>
-                      <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-semibold border border-slate-700">
-                        14 Rooms
-                      </span>
-                    </div>
-                  </th>
-                </tr>
+                    </th>
+                  </tr>
 
-                {/* Sub-Column Headers */}
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">
-                  {/* Block 1 */}
-                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
-                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
-                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
+                  {/* Sub-Column Headers */}
+                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">
+                    {/* Block 1 */}
+                    <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                    {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
-                  {/* Block 2 */}
-                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
-                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
-                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
+                    {/* Block 2 */}
+                    <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                    {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
-                  {/* Block 3 */}
-                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
-                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
-                  {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">Show</th>}
+                    {/* Block 3 */}
+                    <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
+                    {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
-                  {/* Block 4 */}
-                  <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                  <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
-                  <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>Status</th>
-                  {isAdmin && <th className="py-2.5 px-2 text-center">Show</th>}
-                </tr>
-              </thead>
+                    {/* Block 4 */}
+                    <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>Status</th>
+                    {isAdmin && <th className="py-2.5 px-2 text-center">View</th>}
+                  </tr>
+                </thead>
 
-              {/* Data Rows */}
-              <tbody className="divide-y divide-slate-100">
-                {tableRows.map((row, rowIdx) => {
-                  return (
-                    <tr key={rowIdx} className="hover:bg-slate-50/80 transition-colors group">
-                      {/* ================= BLOCK 1 ================= */}
-                      {row.block1.isPublicHeader ? (
-                        <td
-                          colSpan={blockColSpan}
-                          className="py-2 px-3 bg-gradient-to-r from-amber-50 via-amber-100/50 to-amber-50 border-r-2 border-slate-300 border-y border-amber-200/80"
-                        >
-                          <div className="flex items-center justify-center gap-2">
-                            <Building2 className="w-3.5 h-3.5 text-amber-700" />
-                            <span className="font-extrabold text-xs text-amber-900 tracking-wider uppercase">
-                              Public Amenities & Areas
-                            </span>
-                          </div>
-                        </td>
-                      ) : (
-                        <>
-                          <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
-                            {renderRoomCell(row.block1)}
+                {/* Data Rows */}
+                <tbody className="divide-y divide-slate-100">
+                  {tableRows.map((row, rowIdx) => {
+                    return (
+                      <tr key={rowIdx} className="hover:bg-slate-50/80 transition-colors group">
+                        {/* ================= BLOCK 1 ================= */}
+                        {row.block1.isPublicHeader ? (
+                          <td
+                            colSpan={blockColSpan}
+                            className="py-2 px-3 bg-gradient-to-r from-amber-50 via-amber-100/50 to-amber-50 border-r-2 border-slate-300 border-y border-amber-200/80"
+                          >
+                            <div className="flex items-center justify-center gap-2">
+                              <Building2 className="w-3.5 h-3.5 text-amber-700" />
+                              <span className="font-extrabold text-xs text-amber-900 tracking-wider uppercase">
+                                Public Amenities & Areas
+                              </span>
+                            </div>
                           </td>
-                          <td className="py-2 px-2 border-r border-slate-100 text-center">
-                            {renderDateBadge(row.block1.rpm)}
-                          </td>
-                          <td className="py-2 px-2 border-r border-slate-100 text-center">
-                            {renderInspectionDate(row.block1)}
-                          </td>
-                          <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
-                            {renderInspectionBadge(row.block1)}
-                          </td>
-                          {isAdmin && (
-                            <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
-                              {renderShowButton(row.block1)}
+                        ) : (
+                          <>
+                            <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
+                              {renderRoomCell(row.block1)}
                             </td>
-                          )}
-                        </>
-                      )}
+                            <td className="py-2 px-2 border-r border-slate-100 text-center">
+                              {renderRpmDate(row.block1)}
+                            </td>
+                            <td className="py-2 px-2 border-r border-slate-100 text-center">
+                              {renderInspectionDate(row.block1)}
+                            </td>
+                            <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
+                              {renderInspectionBadge(row.block1)}
+                            </td>
+                            {isAdmin && (
+                              <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                                {renderShowButton(row.block1)}
+                              </td>
+                            )}
+                          </>
+                        )}
 
-                      {/* ================= BLOCK 2 ================= */}
-                      <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
-                        {renderRoomCell(row.block2)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderDateBadge(row.block2.rpm)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderInspectionDate(row.block2)}
-                      </td>
-                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
-                        {renderInspectionBadge(row.block2)}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
-                          {renderShowButton(row.block2)}
+                        {/* ================= BLOCK 2 ================= */}
+                        <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
+                          {renderRoomCell(row.block2)}
                         </td>
-                      )}
-
-                      {/* ================= BLOCK 3 ================= */}
-                      <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
-                        {renderRoomCell(row.block3)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderDateBadge(row.block3.rpm)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderInspectionDate(row.block3)}
-                      </td>
-                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
-                        {renderInspectionBadge(row.block3)}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
-                          {renderShowButton(row.block3)}
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderRpmDate(row.block2)}
                         </td>
-                      )}
-
-                      {/* ================= BLOCK 4 ================= */}
-                      <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
-                        {renderRoomCell(row.block4)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderDateBadge(row.block4.rpm)}
-                      </td>
-                      <td className="py-2 px-2 border-r border-slate-100 text-center">
-                        {renderInspectionDate(row.block4)}
-                      </td>
-                      <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>
-                        {renderInspectionBadge(row.block4)}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-2 px-2 text-center">
-                          {renderShowButton(row.block4)}
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderInspectionDate(row.block2)}
                         </td>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
+                          {renderInspectionBadge(row.block2)}
+                        </td>
+                        {isAdmin && (
+                          <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                            {renderShowButton(row.block2)}
+                          </td>
+                        )}
 
-          {/* Table Footer Status Bar */}
-          <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
-            {/* Left: Summary Info */}
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span className="text-slate-600 font-medium">
-                Live database synchronization active. Click on any room to open the inspection form.
-              </span>
+                        {/* ================= BLOCK 3 ================= */}
+                        <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
+                          {renderRoomCell(row.block3)}
+                        </td>
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderRpmDate(row.block3)}
+                        </td>
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderInspectionDate(row.block3)}
+                        </td>
+                        <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>
+                          {renderInspectionBadge(row.block3)}
+                        </td>
+                        {isAdmin && (
+                          <td className="py-2 px-2 border-r-2 border-slate-300 text-center">
+                            {renderShowButton(row.block3)}
+                          </td>
+                        )}
+
+                        {/* ================= BLOCK 4 ================= */}
+                        <td className="py-2 px-3 border-r border-slate-100 whitespace-nowrap">
+                          {renderRoomCell(row.block4)}
+                        </td>
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderRpmDate(row.block4)}
+                        </td>
+                        <td className="py-2 px-2 border-r border-slate-100 text-center">
+                          {renderInspectionDate(row.block4)}
+                        </td>
+                        <td className={`py-2 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>
+                          {renderInspectionBadge(row.block4)}
+                        </td>
+                        {isAdmin && (
+                          <td className="py-2 px-2 text-center">
+                            {renderShowButton(row.block4)}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
 
-            {/* Right: Legend */}
-            <div className="flex flex-wrap items-center gap-4 text-xs">
-              <span className="font-bold text-slate-700">Legend:</span>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  YYYY-MM-DD
+            {/* Table Footer Status Bar */}
+            <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 text-xs">
+              {/* Left: Summary Info */}
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span className="text-slate-600 font-medium">
+                  Live database synchronization active. Click on any room to open the inspection form.
                 </span>
-                <span className="text-slate-600 text-[11px]">Scheduled Date</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-slate-950">
-                  <Check className="w-2.5 h-2.5 stroke-[3]" /> Done
-                </span>
-                <span className="text-slate-600 text-[11px]">Completed Inspection</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
-                  Pending
-                </span>
-                <span className="text-slate-600 text-[11px]">Pending Inspection</span>
+
+              {/* Right: Legend */}
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                <span className="font-bold text-slate-700">Legend:</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    YYYY-MM-DD
+                  </span>
+                  <span className="text-slate-600 text-[11px]">Scheduled Date</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-slate-950">
+                    <Check className="w-2.5 h-2.5 stroke-[3]" /> Done
+                  </span>
+                  <span className="text-slate-600 text-[11px]">Completed Inspection</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                    Pending
+                  </span>
+                  <span className="text-slate-600 text-[11px]">Pending Inspection</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
         )}
       </main>
     </div>

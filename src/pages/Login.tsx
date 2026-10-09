@@ -1,43 +1,48 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth, DEFAULT_USERS } from '../context/AuthContext';
-import { Hotel, KeyRound, Mail, ArrowRight, ShieldCheck, UserCheck, ClipboardCheck } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { api } from '../services/api';
+import { Hotel, KeyRound, ArrowRight, ShieldCheck, UserCheck, ClipboardCheck, ChevronDown, Mail } from 'lucide-react';
+
+const ROLE_NAMES: Record<string, string> = {
+  rpm: 'RPM Technician',
+  inspector: 'Inspector',
+  admin: 'Admin',
+};
 
 export const Login: React.FC = () => {
+  const [role, setRole] = useState<'rpm' | 'inspector' | 'admin'>('rpm');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!email.trim()) {
-      setError('Please enter your staff email.');
+    if (!password.trim()) {
+      setError('Please enter your password.');
       return;
     }
 
-    // Match demo user or create session user
-    const matched = DEFAULT_USERS.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
-    const userToLogin = matched || {
-      id: Date.now(),
-      email: email.trim(),
-      full_name: email.split('@')[0].replace('.', ' ').replace(/\b\w/g, (c) => c.toUpperCase()) + ' (Inspector)',
-      role: 'inspector' as const,
-      is_active: true,
-    };
+    setIsLoading(true);
 
-    login(`token_${Date.now()}`, userToLogin);
-    navigate('/dashboard');
-  };
-
-  const handleQuickLogin = (demoEmail: string) => {
-    const matched = DEFAULT_USERS.find((u) => u.email === demoEmail);
-    if (matched) {
-      login(`token_${Date.now()}`, matched);
+    try {
+      // Authenticate against backend User DB with email and/or role
+      const res = await api.login({
+        role,
+        email: email.trim() || undefined,
+        password: password.trim(),
+      });
+      login(res.access_token, res.user);
       navigate('/dashboard');
+    } catch (err: any) {
+      setError(err?.message || `Invalid credentials for ${ROLE_NAMES[role]}.`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -71,37 +76,71 @@ export const Login: React.FC = () => {
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-slate-400 mb-1.5">
-                Staff Email
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                Role
               </label>
               <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  {role === 'admin' ? (
+                    <ShieldCheck className="w-4 h-4 text-purple-400" />
+                  ) : role === 'inspector' ? (
+                    <ClipboardCheck className="w-4 h-4 text-blue-400" />
+                  ) : (
+                    <UserCheck className="w-4 h-4 text-amber-400" />
+                  )}
+                </div>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as 'rpm' | 'inspector' | 'admin')}
+                  className="block w-full pl-10 pr-10 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition appearance-none cursor-pointer"
+                >
+                  <option value="rpm" className="bg-slate-900 text-white">RPM Technician</option>
+                  <option value="inspector" className="bg-slate-900 text-white">Inspector</option>
+                  <option value="admin" className="bg-slate-900 text-white">Admin</option>
+                </select>
+                <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
+                  <ChevronDown className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Staff Email
+                </label>
+                <span className="text-[11px] text-slate-500 font-normal">
+                  Optional for default accounts
+                </span>
+              </div>
+              <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                  <Mail className="w-4 h-4" />
+                  <Mail className="w-4 h-4 text-slate-400" />
                 </div>
                 <input
                   type="email"
-                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@maxwell.com"
+                  placeholder={`e.g. ${role}@maxwell.com or user's email`}
                   className="block w-full pl-10 pr-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-medium uppercase tracking-wider text-slate-400 mb-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
                 Password
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                  <KeyRound className="w-4 h-4" />
+                  <KeyRound className="w-4 h-4 text-slate-400" />
                 </div>
                 <input
                   type="password"
+                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="••••••••••••"
                   className="block w-full pl-10 pr-3 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition"
                 />
               </div>
@@ -109,62 +148,19 @@ export const Login: React.FC = () => {
 
             <button
               type="submit"
-              className="w-full mt-2 py-3 px-4 rounded-xl text-sm font-semibold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer font-medium"
+              disabled={isLoading}
+              className="w-full mt-2 py-3 px-4 rounded-xl text-sm font-semibold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer font-medium disabled:opacity-60"
             >
-              <span>Sign In & Open Form</span>
-              <ArrowRight className="w-4 h-4" />
+              {isLoading ? (
+                <span>Signing In...</span>
+              ) : (
+                <>
+                  <span>Sign In & Open Form</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </form>
-
-          {/* Quick Demo Logins */}
-          <div className="mt-8 pt-6 border-t border-slate-800">
-            <div className="text-xs text-center text-slate-400 mb-3 font-medium">
-              Demo Test Accounts (One-Click)
-            </div>
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('rpm@maxwell.com')}
-                className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-amber-400" />
-                  <span>RPM Technician</span>
-                </div>
-                <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/60">
-                  RPM User
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('inspector@maxwell.com')}
-                className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <ClipboardCheck className="w-4 h-4 text-blue-400" />
-                  <span>John Tan</span>
-                </div>
-                <span className="text-[10px] uppercase font-bold text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800/60">
-                  Inspector
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin@maxwell.com')}
-                className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center justify-between border border-slate-700 transition cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-purple-400" />
-                  <span>Maxwell Admin</span>
-                </div>
-                <span className="text-[10px] uppercase font-bold text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-800/60">
-                  Admin
-                </span>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>

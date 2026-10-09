@@ -196,7 +196,8 @@ export const api = {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      throw new Error(`Failed to update inspection (${res.status})`);
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update inspection (${res.status})`);
     }
     return res.json();
   },
@@ -269,15 +270,187 @@ export const api = {
     return res.json();
   },
 
+  // Admin User Management: Update user
+  async updateUser(
+    userId: number,
+    data: {
+      email?: string;
+      full_name?: string;
+      role?: string;
+      password?: string;
+      is_active?: boolean;
+    }
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/auth/users/${userId}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update user (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Admin User Management: Delete user
+  async deleteUser(userId: number): Promise<any> {
+    const res = await fetch(`${API_BASE}/auth/users/${userId}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to delete user (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Get Maxwell template with all sections and items
+  async getTemplate(): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/maxwell`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch checklist template (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Update template metadata
+  async updateTemplate(data: {
+    title?: string;
+    property_name?: string;
+    header_fields?: string[];
+    footer_fields?: string[];
+  }): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/maxwell`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update template (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Reset template to default
+  async resetTemplate(): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/maxwell/reset`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to reset template (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Add Section
+  async addSection(data: { code: string; title: string; sort_order?: number }): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/maxwell/sections`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to add section (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Update Section
+  async updateSection(
+    sectionId: number,
+    data: { code?: string; title?: string; sort_order?: number }
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/sections/${sectionId}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update section (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Delete Section
+  async deleteSection(sectionId: number): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/sections/${sectionId}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to delete section (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Add Checklist Item
+  async addChecklistItem(
+    sectionId: number,
+    data: { item_no?: number; description: string; sort_order?: number }
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/sections/${sectionId}/items`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to add checklist item (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Update Checklist Item
+  async updateChecklistItem(
+    itemId: number,
+    data: { item_no?: number; description?: string; sort_order?: number }
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/items/${itemId}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update checklist item (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Form Structure: Delete Checklist Item
+  async deleteChecklistItem(itemId: number): Promise<any> {
+    const res = await fetch(`${API_BASE}/templates/items/${itemId}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to delete checklist item (${res.status})`);
+    }
+    return res.json();
+  },
+
   // Backend Authentication Login
-  async login(email: string): Promise<{ access_token: string; user: any }> {
+  async login(credentials: { role?: string; email?: string; password?: string } | string): Promise<{ access_token: string; user: any }> {
+    const payload = typeof credentials === 'string' ? { email: credentials, password: '' } : credentials;
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      throw new Error(`Login failed (${res.status})`);
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.detail || `Login failed (${res.status})`);
     }
     return res.json();
   },
@@ -301,7 +474,7 @@ export const api = {
   async uploadPdfToDropbox(
     file: Blob,
     filename: string,
-    metadata?: { room_number?: string; quarter?: string; year?: number }
+    metadata?: { room_number?: string; quarter?: string; year?: number; document_type?: string; status?: string }
   ): Promise<{
     success: boolean;
     message: string;
@@ -314,6 +487,8 @@ export const api = {
     if (metadata?.room_number) formData.append('room_number', metadata.room_number);
     if (metadata?.quarter) formData.append('quarter', metadata.quarter);
     if (metadata?.year) formData.append('year', String(metadata.year));
+    if (metadata?.document_type) formData.append('document_type', metadata.document_type);
+    if (metadata?.status) formData.append('status', metadata.status);
     if (filename) formData.append('filename', filename);
 
     const token = localStorage.getItem('token');
@@ -335,14 +510,14 @@ export const api = {
     room_number: string;
     inspection_date: string;
     year: number;
-    quarter: string;
+    quarter?: string;
     document_type?: string;
   }): Promise<{ success: boolean; download_url: string; filename: string; path: string }> {
     const query = new URLSearchParams();
     query.append('room_number', params.room_number);
     query.append('inspection_date', params.inspection_date);
     query.append('year', String(params.year));
-    query.append('quarter', params.quarter);
+    if (params.quarter) query.append('quarter', params.quarter);
     if (params.document_type) query.append('document_type', params.document_type);
 
     const res = await fetch(`${API_BASE}/dropbox/download-link?${query.toString()}`, {
@@ -353,5 +528,41 @@ export const api = {
       throw new Error(errJson?.detail || `Failed to get download link (${res.status})`);
     }
     return res.json();
+  },
+
+  // Download inspection PDF directly from Dropbox via backend proxy
+  async downloadDropboxPdf(params: {
+    room_number: string;
+    inspection_date: string;
+    year: number;
+    quarter?: string;
+    document_type?: string;
+  }): Promise<{ blob: Blob; filename: string }> {
+    const query = new URLSearchParams();
+    query.append('room_number', params.room_number);
+    query.append('inspection_date', params.inspection_date);
+    query.append('year', String(params.year));
+    if (params.quarter) query.append('quarter', params.quarter);
+    if (params.document_type) query.append('document_type', params.document_type);
+
+    const res = await fetch(`${API_BASE}/dropbox/download?${query.toString()}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to download PDF (${res.status})`);
+    }
+
+    let filename = `${params.document_type || 'Report'}_${params.room_number}.pdf`;
+    const disposition = res.headers.get('Content-Disposition');
+    if (disposition && disposition.includes('filename=')) {
+      const match = disposition.match(/filename="?([^";]+)"?/);
+      if (match && match[1]) {
+        filename = match[1];
+      }
+    }
+
+    const blob = await res.blob();
+    return { blob, filename };
   },
 };

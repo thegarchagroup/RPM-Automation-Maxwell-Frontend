@@ -23,7 +23,7 @@ export const DEFAULT_USERS: User[] = [
   {
     id: 2,
     email: 'inspector@maxwell.com',
-    full_name: 'John Tan (Inspector)',
+    full_name: 'Inspector',
     role: 'inspector',
     is_active: true,
   },
