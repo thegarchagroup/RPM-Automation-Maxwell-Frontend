@@ -10,6 +10,8 @@ export interface RpmRecord {
   room_or_area: string;
   eng_date: string | null;
   rpm_date?: string | null;
+  maintenance_carried_by?: string | null;
+  inspected_by?: string | null;
   ac_servicing: string | null;
   housekeeping: string | null;
   inspection_status: string; // "Done" | "Pending" | "In Progress"
@@ -58,7 +60,62 @@ function getHeaders(): HeadersInit {
   };
 }
 
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+const memoryCache = new Map<string, CacheEntry<any>>();
+
+export function getCached<T>(key: string, ttlMs = 45000): T | null {
+  const mem = memoryCache.get(key);
+  if (mem && Date.now() - mem.timestamp < ttlMs) {
+    return mem.data;
+  }
+  try {
+    const raw = sessionStorage.getItem(`rpm_cache_${key}`);
+    if (raw) {
+      const parsed: CacheEntry<T> = JSON.parse(raw);
+      if (Date.now() - parsed.timestamp < ttlMs) {
+        memoryCache.set(key, parsed);
+        return parsed.data;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function setCached<T>(key: string, data: T): void {
+  const entry: CacheEntry<T> = { data, timestamp: Date.now() };
+  memoryCache.set(key, entry);
+  try {
+    sessionStorage.setItem(`rpm_cache_${key}`, JSON.stringify(entry));
+  } catch {}
+}
+
+export function clearCache(prefix?: string): void {
+  if (!prefix) {
+    memoryCache.clear();
+    try {
+      Object.keys(sessionStorage).forEach((k) => {
+        if (k.startsWith('rpm_cache_')) sessionStorage.removeItem(k);
+      });
+    } catch {}
+    return;
+  }
+  for (const k of Array.from(memoryCache.keys())) {
+    if (k.startsWith(prefix)) memoryCache.delete(k);
+  }
+  try {
+    Object.keys(sessionStorage).forEach((k) => {
+      if (k.startsWith(`rpm_cache_${prefix}`)) sessionStorage.removeItem(k);
+    });
+  } catch {}
+}
+
 export const api = {
+  clearCache: (prefix?: string) => clearCache(prefix),
+
   // Dashboard Stats
   async getDashboardStats(params?: {
     property_name?: string;
@@ -99,7 +156,7 @@ export const api = {
     search?: string;
     year?: number;
     quarter?: string;
-  }): Promise<RpmRecord[]> {
+  }, forceFresh = false): Promise<RpmRecord[]> {
     const query = new URLSearchParams();
     if (filters?.property_name && filters.property_name !== 'all') query.append('property_name', filters.property_name);
     if (filters?.floor && filters.floor !== 'all') query.append('floor', filters.floor);
@@ -109,17 +166,26 @@ export const api = {
     if (filters?.year) query.append('year', String(filters.year));
     if (filters?.quarter) query.append('quarter', filters.quarter);
 
+    const cacheKey = `rpm_records_${query.toString()}`;
+    if (!forceFresh) {
+      const cached = getCached<RpmRecord[]>(cacheKey);
+      if (cached) return cached;
+    }
+
     const res = await fetch(`${API_BASE}/rpm/records?${query.toString()}`, {
       headers: getHeaders(),
     });
     if (!res.ok) {
       throw new Error(`Failed to fetch RPM records (${res.status})`);
     }
-    return res.json();
+    const data = await res.json();
+    setCached(cacheKey, data);
+    return data;
   },
 
   // Create an RPM record
   async createRpmRecord(data: Partial<RpmRecord>): Promise<RpmRecord> {
+    clearCache('rpm_records');
     const res = await fetch(`${API_BASE}/rpm/records`, {
       method: 'POST',
       headers: getHeaders(),
@@ -133,6 +199,7 @@ export const api = {
 
   // Update an RPM record (e.g. toggle Done/Pending or change dates)
   async updateRpmRecord(id: number, data: Partial<RpmRecord>): Promise<RpmRecord> {
+    clearCache('rpm_records');
     const res = await fetch(`${API_BASE}/rpm/records/${id}`, {
       method: 'PUT',
       headers: getHeaders(),
@@ -160,6 +227,8 @@ export const api = {
     inspector_remark?: string;
     items: Array<{ checklist_item_id: number; result: string; remark?: string | null }>;
   }): Promise<any> {
+    clearCache('inspections');
+    clearCache('rpm_records');
     const res = await fetch(`${API_BASE}/inspections/`, {
       method: 'POST',
       headers: getHeaders(),
@@ -190,6 +259,8 @@ export const api = {
       items?: Array<{ checklist_item_id: number; result: string; remark?: string | null }>;
     }
   ): Promise<any> {
+    clearCache('inspections');
+    clearCache('rpm_records');
     const res = await fetch(`${API_BASE}/inspections/${id}`, {
       method: 'PUT',
       headers: getHeaders(),
@@ -208,12 +279,20 @@ export const api = {
     property_name?: string;
     quarter?: string;
     status?: string;
-  }): Promise<any[]> {
+    has_defects?: boolean;
+  }, forceFresh = false): Promise<any[]> {
     const query = new URLSearchParams();
     if (filters?.room_number) query.append('room_number', filters.room_number);
     if (filters?.property_name) query.append('property_name', filters.property_name);
     if (filters?.quarter) query.append('quarter', filters.quarter);
     if (filters?.status) query.append('status', filters.status);
+    if (filters?.has_defects !== undefined) query.append('has_defects', String(filters.has_defects));
+
+    const cacheKey = `inspections_${query.toString()}`;
+    if (!forceFresh) {
+      const cached = getCached<any[]>(cacheKey);
+      if (cached) return cached;
+    }
 
     const res = await fetch(`${API_BASE}/inspections/?${query.toString()}`, {
       headers: getHeaders(),
@@ -221,7 +300,9 @@ export const api = {
     if (!res.ok) {
       throw new Error(`Failed to fetch inspections (${res.status})`);
     }
-    return res.json();
+    const data = await res.json();
+    setCached(cacheKey, data);
+    return data;
   },
 
   // Get single inspection by id
@@ -231,6 +312,43 @@ export const api = {
     });
     if (!res.ok) {
       throw new Error(`Failed to fetch inspection (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Mark single defect item as fixed / unfixed
+  async fixDefectItem(
+    inspectionId: number,
+    itemId: number,
+    data: { is_fixed: boolean; fixed_remark?: string; fixed_by?: string }
+  ): Promise<any> {
+    clearCache('inspections');
+    const res = await fetch(`${API_BASE}/inspections/${inspectionId}/items/${itemId}/fix`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to update defect item (${res.status})`);
+    }
+    return res.json();
+  },
+
+  // Mark all defect items in inspection as fixed
+  async fixAllDefects(
+    inspectionId: number,
+    data?: { fixed_remark?: string; fixed_by?: string; item_ids?: number[] }
+  ): Promise<any> {
+    clearCache('inspections');
+    const res = await fetch(`${API_BASE}/inspections/${inspectionId}/fix-all`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data || {}),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.detail || `Failed to resolve defects (${res.status})`);
     }
     return res.json();
   },
@@ -456,13 +574,17 @@ export const api = {
   },
 
   // Dropbox Cloud Storage Integration
-  async getDropboxStatus(): Promise<{
+  async getDropboxStatus(propertyName?: string): Promise<{
     configured: boolean;
     app_key_present: boolean;
     has_token: boolean;
     target_folder: string;
+    hotel_folders?: Record<string, string>;
   }> {
-    const res = await fetch(`${API_BASE}/dropbox/status`, {
+    const url = propertyName 
+      ? `${API_BASE}/dropbox/status?property_name=${encodeURIComponent(propertyName)}`
+      : `${API_BASE}/dropbox/status`;
+    const res = await fetch(url, {
       headers: getHeaders(),
     });
     if (!res.ok) {
@@ -474,7 +596,14 @@ export const api = {
   async uploadPdfToDropbox(
     file: Blob,
     filename: string,
-    metadata?: { room_number?: string; quarter?: string; year?: number; document_type?: string; status?: string }
+    metadata?: {
+      room_number?: string;
+      quarter?: string;
+      year?: number;
+      document_type?: string;
+      status?: string;
+      property_name?: string;
+    }
   ): Promise<{
     success: boolean;
     message: string;
@@ -489,6 +618,7 @@ export const api = {
     if (metadata?.year) formData.append('year', String(metadata.year));
     if (metadata?.document_type) formData.append('document_type', metadata.document_type);
     if (metadata?.status) formData.append('status', metadata.status);
+    if (metadata?.property_name) formData.append('property_name', metadata.property_name);
     if (filename) formData.append('filename', filename);
 
     const token = localStorage.getItem('token');
@@ -512,6 +642,7 @@ export const api = {
     year: number;
     quarter?: string;
     document_type?: string;
+    property_name?: string;
   }): Promise<{ success: boolean; download_url: string; filename: string; path: string }> {
     const query = new URLSearchParams();
     query.append('room_number', params.room_number);
@@ -519,6 +650,7 @@ export const api = {
     query.append('year', String(params.year));
     if (params.quarter) query.append('quarter', params.quarter);
     if (params.document_type) query.append('document_type', params.document_type);
+    if (params.property_name) query.append('property_name', params.property_name);
 
     const res = await fetch(`${API_BASE}/dropbox/download-link?${query.toString()}`, {
       headers: getHeaders(),
@@ -537,6 +669,7 @@ export const api = {
     year: number;
     quarter?: string;
     document_type?: string;
+    property_name?: string;
   }): Promise<{ blob: Blob; filename: string }> {
     const query = new URLSearchParams();
     query.append('room_number', params.room_number);
@@ -544,6 +677,7 @@ export const api = {
     query.append('year', String(params.year));
     if (params.quarter) query.append('quarter', params.quarter);
     if (params.document_type) query.append('document_type', params.document_type);
+    if (params.property_name) query.append('property_name', params.property_name);
 
     const res = await fetch(`${API_BASE}/dropbox/download?${query.toString()}`, {
       headers: getHeaders(),

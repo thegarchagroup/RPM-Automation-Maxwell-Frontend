@@ -65,6 +65,53 @@ const getQuarterFromDate = (dateStr: string): string => {
   return '1st Quarter (Jan - April)';
 };
 
+const isSameHotel = (propA?: string, propB?: string): boolean => {
+  if (!propA || !propB) return false;
+  const a = propA.trim().toLowerCase();
+  const b = propB.trim().toLowerCase();
+  if (a === b) return true;
+  if (a.includes('maxwell') && b.includes('maxwell')) return true;
+  if (a.includes('serangoon') && b.includes('serangoon')) return true;
+  if (a.includes('vagabond') && b.includes('vagabond')) return true;
+  return false;
+};
+
+const isSameRoom = (roomA?: string, roomB?: string): boolean => {
+  if (!roomA || !roomB) return false;
+  const a = roomA.toLowerCase().replace(/room\s*/i, '').trim();
+  const b = roomB.toLowerCase().replace(/room\s*/i, '').trim();
+  return a === b;
+};
+
+const normalizeQuarter = (q?: string): string => {
+  if (!q) return '';
+  const s = q.toLowerCase();
+  if (s.includes('1st') || s.includes('q1')) return '1st';
+  if (s.includes('2nd') || s.includes('q2')) return '2nd';
+  if (s.includes('3rd') || s.includes('q3')) return '3rd';
+  return s.trim();
+};
+
+const isSameQuarter = (qA?: string, qB?: string): boolean => {
+  if (!qA || !qB) return false;
+  return normalizeQuarter(qA) === normalizeQuarter(qB);
+};
+
+const extractYearNumber = (val?: string | number): number => {
+  if (!val) return new Date().getFullYear();
+  if (typeof val === 'number') return val;
+  const str = String(val).trim();
+  const isoMatch = str.match(/\b(20\d\d)\b/);
+  if (isoMatch) return parseInt(isoMatch[1], 10);
+  const d = new Date(str);
+  if (!isNaN(d.getFullYear())) return d.getFullYear();
+  return 2026;
+};
+
+const isSameYear = (yA?: string | number, yB?: string | number): boolean => {
+  return extractYearNumber(yA) === extractYearNumber(yB);
+};
+
 const generateDefaultSignatureUrl = (name: string): string => {
   const cleanName = (name || 'Inspector').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="60" viewBox="0 0 220 60"><text x="10" y="42" font-family="'Brush Script MT', 'Dancing Script', cursive, sans-serif" font-size="28" font-style="italic" fill="#0f172a">${cleanName}</text></svg>`;
@@ -362,10 +409,8 @@ export const InspectionForm: React.FC = () => {
             loadInspectionIntoForm(insp);
           } else {
             api.getRpmRecords({ property_name: selectedProperty }).then((records) => {
-              const cleanTarget = urlRoom.toLowerCase().replace(/room\s*/i, '').trim();
               const matched = records?.find((r: any) => {
-                const cleanR = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
-                return cleanR === cleanTarget || r.room_or_area.toLowerCase().trim() === urlRoom.toLowerCase().trim();
+                return isSameRoom(r.room_or_area, urlRoom) && isSameHotel(r.property_name, selectedProperty);
               });
               const rpmDate = matched?.rpm_date || matched?.eng_date;
               if (matched) {
@@ -598,23 +643,65 @@ export const InspectionForm: React.FC = () => {
     );
   };
 
-  // Check duplicate inspection in this quarter before submitting
-  const checkAlreadyInspectedThisQuarter = async (room: string, quarter: string, date: string): Promise<boolean> => {
+  // Check duplicate inspection: MUST match SAME HOTEL, SAME ROOM NO, SAME QUARTER, SAME YEAR
+  const checkAlreadyInspectedThisQuarter = async (
+    property: string,
+    room: string,
+    quarter: string,
+    date: string
+  ): Promise<boolean> => {
     try {
-      const year = parseInt(date.split('-')[0], 10) || 2026;
-      const records = await api.getRpmRecords({ year, quarter });
+      const targetYear = extractYearNumber(date);
 
-      if (!records || records.length === 0) return false;
-
-      const cleanTarget = room.toLowerCase().replace(/room\s*/i, '').trim();
-
-      const matched = records.find((r) => {
-        const rClean = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
-        return rClean === cleanTarget || r.room_or_area.toLowerCase() === room.toLowerCase().trim();
+      // 1. Check existing saved inspections in DB for this hotel & room
+      const inspections = await api.getInspections({
+        room_number: room,
+        property_name: property,
       });
 
-      if (matched && (matched.inspection_date || matched.inspection_status === 'Done')) {
-        return true;
+      if (inspections && inspections.length > 0) {
+        const dupInsp = inspections.find((insp: any) => {
+          const sameHotel = isSameHotel(insp.property_name, property);
+          const sameRoom = isSameRoom(insp.room_number, room);
+          const sameQuarter = isSameQuarter(insp.quarter, quarter);
+          const sameYear = isSameYear(insp.inspection_date || insp.created_at, targetYear);
+          const isSubmittedOrDone = ['submitted', 'verified', 'accepted', 'rejected'].includes(
+            (insp.status || '').toLowerCase()
+          );
+          return sameHotel && sameRoom && sameQuarter && sameYear && isSubmittedOrDone;
+        });
+
+        if (dupInsp) {
+          return true;
+        }
+      }
+
+      // 2. Check RPM Schedule records for this hotel, room, quarter, and year
+      const records = await api.getRpmRecords({
+        property_name: property,
+        year: targetYear,
+        quarter,
+      });
+
+      if (records && records.length > 0) {
+        const dupRecord = records.find((r: any) => {
+          const sameHotel = isSameHotel(r.property_name, property);
+          const sameRoom = isSameRoom(r.room_or_area, room);
+          const sameQuarter = isSameQuarter(r.quarter, quarter);
+          const sameYear = isSameYear(r.year || r.rpm_date, targetYear);
+          const hasRpmOrInspection = Boolean(
+            r.rpm_date ||
+            r.inspection_date ||
+            r.inspection_status === 'Done' ||
+            r.inspection_status === 'Accepted' ||
+            r.inspection_status === 'Rejected'
+          );
+          return sameHotel && sameRoom && sameQuarter && sameYear && hasRpmOrInspection;
+        });
+
+        if (dupRecord) {
+          return true;
+        }
       }
     } catch (e) {
       console.warn('Duplicate check offline or backend sync fallback', e);
@@ -660,14 +747,20 @@ export const InspectionForm: React.FC = () => {
       return;
     }
 
-    // Duplicate Check for new submissions
+    // Duplicate Check for new submissions: MUST be same hotel, same room, same quarter, same year
     if (!activeInspectionId) {
       setIsCheckingDuplicate(true);
-      const isDuplicate = await checkAlreadyInspectedThisQuarter(roomNumber, selectedQuarter, selectedDate);
+      const isDuplicate = await checkAlreadyInspectedThisQuarter(
+        selectedProperty,
+        roomNumber,
+        selectedQuarter,
+        selectedDate
+      );
       setIsCheckingDuplicate(false);
 
       if (isDuplicate) {
-        const msg = `Room ${roomNumber} has ALREADY been submitted for ${selectedQuarter}. Duplicate inspection submissions for the same quarter are blocked.`;
+        const targetYear = extractYearNumber(selectedDate);
+        const msg = `Room ${roomNumber} (${selectedProperty}) has ALREADY been submitted for ${selectedQuarter} ${targetYear}. Duplicate inspection submissions for the same hotel, room, quarter, and year are blocked.`;
         setDuplicateAlert(msg);
         showWarningModal(
           'Duplicate Inspection Blocked',
@@ -726,11 +819,14 @@ export const InspectionForm: React.FC = () => {
     // 2. Sync RPM Schedule Record to Pending
     try {
       const year = getYearFromDateString(selectedDate);
-      const records = await api.getRpmRecords({ year, quarter: selectedQuarter });
-      const cleanTarget = roomNumber.toLowerCase().replace(/room\s*/i, '').trim();
+      const records = await api.getRpmRecords({ property_name: selectedProperty, year, quarter: selectedQuarter });
       const matched = records?.find((r) => {
-        const rClean = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
-        return rClean === cleanTarget || r.room_or_area.toLowerCase() === roomNumber.toLowerCase().trim();
+        return (
+          isSameRoom(r.room_or_area, roomNumber) &&
+          isSameHotel(r.property_name, selectedProperty) &&
+          isSameQuarter(r.quarter, selectedQuarter) &&
+          isSameYear(r.year, year)
+        );
       });
 
       const formattedDate = formatDisplayDate(selectedDate);
@@ -738,17 +834,19 @@ export const InspectionForm: React.FC = () => {
         await api.updateRpmRecord(matched.id, {
           inspection_status: 'Pending',
           rpm_date: formattedDate,
+          maintenance_carried_by: maintenanceCarriedBy,
         });
       } else {
         await api.createRpmRecord({
           property_name: selectedProperty,
           room_or_area: roomNumber.toLowerCase().includes('room') ? roomNumber : `Room ${roomNumber}`,
           category: 'guest_room',
-          floor: `Level ${roomNumber.charAt(0)}`,
+          floor: `Level ${roomNumber.replace(/[^0-9]/g, '').charAt(0) || '1'}`,
           quarter: selectedQuarter,
           year: year,
           inspection_status: 'Pending',
           rpm_date: formattedDate,
+          maintenance_carried_by: maintenanceCarriedBy,
         });
       }
     } catch (e) {
@@ -784,6 +882,7 @@ export const InspectionForm: React.FC = () => {
         year,
         document_type: 'RPM',
         status: 'submitted',
+        property_name: selectedProperty,
       });
 
       setDropboxStatus({
@@ -932,11 +1031,14 @@ export const InspectionForm: React.FC = () => {
     // 2. Sync RPM Schedule Record to Accepted / Rejected on Dashboard
     try {
       const year = getYearFromDateString(selectedDate);
-      const records = await api.getRpmRecords({ property_name: selectedProperty });
-      const cleanTarget = roomNumber.toLowerCase().replace(/room\s*/i, '').trim();
+      const records = await api.getRpmRecords({ property_name: selectedProperty, year, quarter: selectedQuarter });
       const matched = records?.find((r) => {
-        const rClean = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
-        return rClean === cleanTarget || r.room_or_area.toLowerCase() === roomNumber.toLowerCase().trim();
+        return (
+          isSameRoom(r.room_or_area, roomNumber) &&
+          isSameHotel(r.property_name, selectedProperty) &&
+          isSameQuarter(r.quarter, selectedQuarter) &&
+          isSameYear(r.year, year)
+        );
       });
 
       const formattedDate = formatDisplayDate(selectedDate);
@@ -944,6 +1046,7 @@ export const InspectionForm: React.FC = () => {
         await api.updateRpmRecord(matched.id, {
           inspection_status: outcome,
           inspection_date: formattedDate,
+          inspected_by: effectiveInspector,
         });
       } else {
         await api.createRpmRecord({
@@ -955,6 +1058,7 @@ export const InspectionForm: React.FC = () => {
           year: year,
           inspection_status: outcome,
           inspection_date: formattedDate,
+          inspected_by: effectiveInspector,
         });
       }
     } catch (e) {
@@ -995,6 +1099,7 @@ export const InspectionForm: React.FC = () => {
         year,
         document_type: 'Inspection',
         status: outcome,
+        property_name: selectedProperty,
       });
 
       setDropboxStatus({
@@ -1110,6 +1215,8 @@ export const InspectionForm: React.FC = () => {
             inspection_status: targetStatus === 'verified' ? 'Done' : (targetStatus === 'submitted' ? 'Pending' : matched.inspection_status),
             inspection_date: targetStatus === 'verified' ? formattedDate : matched.inspection_date,
             rpm_date: targetStatus === 'submitted' ? formattedDate : (matched.rpm_date || formattedDate),
+            maintenance_carried_by: maintenanceCarriedBy || undefined,
+            inspected_by: inspectedBy || undefined,
           });
         }
       } catch (e) {
@@ -1146,6 +1253,7 @@ export const InspectionForm: React.FC = () => {
           year,
           document_type: 'Inspection',
           status: inspectionStatus || 'Accepted',
+          property_name: selectedProperty,
         });
 
         setDropboxStatus({
@@ -1187,6 +1295,7 @@ export const InspectionForm: React.FC = () => {
           year,
           document_type: 'RPM',
           status: 'submitted',
+          property_name: selectedProperty,
         });
 
         setDropboxStatus({
@@ -1249,6 +1358,7 @@ export const InspectionForm: React.FC = () => {
         year,
         quarter: selectedQuarter,
         document_type: docType,
+        property_name: selectedProperty,
       });
 
       downloadPdfBlob(blob, filename);
@@ -1329,6 +1439,7 @@ export const InspectionForm: React.FC = () => {
         year,
         document_type: docType,
         status: resolvedStatus,
+        property_name: selectedProperty,
       });
 
       setDropboxStatus({
@@ -1441,7 +1552,7 @@ export const InspectionForm: React.FC = () => {
 
       {/* Main Form Sheet */}
       <main className="max-w-5xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6">
-        {/* Admin View-Only Toolbar */}
+        {/* Admin Mode Toolbar */}
         {isAdmin && (
           <div className="mb-6 p-4 rounded-2xl bg-slate-900 border border-slate-700 text-white flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl print:hidden animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center gap-3">
@@ -1450,7 +1561,7 @@ export const InspectionForm: React.FC = () => {
               </div>
               <div>
                 <div className="font-extrabold text-sm sm:text-base text-white flex items-center gap-2">
-                  <span>Admin Mode: View-Only</span>
+                  <span>{isSubmitted && !isVerified ? 'Admin Inspection Mode' : 'Admin Mode: View-Only'}</span>
                   <span
                     className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isVerified
                         ? 'bg-blue-400 text-slate-950'
@@ -1459,13 +1570,15 @@ export const InspectionForm: React.FC = () => {
                           : 'bg-slate-700 text-slate-200'
                       }`}
                   >
-                    Room {roomNumber} • {isVerified ? 'Verified' : isSubmitted ? 'Submitted' : 'Not Submitted'}
+                    Room {roomNumber} • {isVerified ? 'Verified' : isSubmitted ? 'Submitted (Ready for Inspection)' : 'Not Submitted'}
                   </span>
                 </div>
                 <div className="text-xs text-slate-300 mt-0.5">
-                  {isSubmitted || isVerified
-                    ? 'Official submitted form responses are locked in view-only mode and cannot be edited by Admin.'
-                    : "This form has not been submitted yet. To customize the form structure (sections & items), use the 'Form Structure' button in the navbar."}
+                  {isSubmitted && !isVerified
+                    ? 'RPM form has been submitted. As Admin, you can review checklist items, add inspector remarks & signature, and Accept or Reject this inspection.'
+                    : isVerified
+                      ? 'Official submitted form responses are verified and locked.'
+                      : "This form has not been submitted yet. To customize the form structure (sections & items), use the 'Form Structure' button in the navbar."}
                 </div>
               </div>
             </div>
@@ -1698,7 +1811,7 @@ export const InspectionForm: React.FC = () => {
                     <h2 className="text-sm sm:text-base font-bold text-slate-900 uppercase tracking-wide">
                       {section.code}. {section.title}
                     </h2>
-                    {!isAdmin && ((user?.role === 'inspector' && isSubmitted && !isVerified) || (user?.role !== 'inspector' && !isSubmitted)) && (
+                    {(((user?.role === 'inspector' || isAdmin) && isSubmitted && !isVerified) || (user?.role !== 'inspector' && !isAdmin && !isSubmitted)) && (
                       <button
                         type="button"
                         onClick={() => handlePassSection(section)}
@@ -1750,16 +1863,16 @@ export const InspectionForm: React.FC = () => {
 
                           const isInspector = user?.role === 'inspector';
                           const isRpm = user?.role === 'rpm';
+                          const canInspect = (isInspector || isAdmin) && isSubmitted && !isVerified;
+                          const canFillRpm = isRpm && !isSubmitted && !isVerified;
 
                           // Status-based disabled rules:
-                          // - Admin can view submitted forms, but CANNOT edit them
+                          // - Admin or Inspector can inspect after RPM submission (isSubmitted && !isVerified)
                           // - Once verified, everything is locked
                           // - RPM technician cannot edit results once submitted
-                          // - Inspector cannot edit unsubmitted forms (!isSubmitted)
-                          // - Inspector can toggle Pass / Fail during verification (isSubmitted && !isVerified)
-                          const isResultDisabled = isAdmin || isVerified || (isRpm && isSubmitted) || (isInspector && !isSubmitted);
+                          const isResultDisabled = isVerified || (!canFillRpm && !canInspect);
                           const isRpmRemarkDisabled = isAdmin || isInspector || isSubmitted || isVerified;
-                          const isInspectorRemarkDisabled = isAdmin || isRpm || isVerified || (isInspector && !isSubmitted);
+                          const isInspectorRemarkDisabled = isVerified || !canInspect;
 
                           return (
                             <tr
@@ -2018,22 +2131,22 @@ export const InspectionForm: React.FC = () => {
                 )}
               </div>
 
-              {/* CARD 3: Inspected By (Inspector Role) */}
+              {/* CARD 3: Inspected By (Inspector Role or Admin Inspecting) */}
               <div
-                className={`p-4 rounded-xl border-2 flex flex-col justify-between space-y-3 ${user?.role === 'inspector' ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 bg-slate-50'
+                className={`p-4 rounded-xl border-2 flex flex-col justify-between space-y-3 ${user?.role === 'inspector' || (isAdmin && isSubmitted) ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 bg-slate-50'
                   }`}
               >
                 <div>
                   <label htmlFor="inspected-by-input" className="text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5 flex items-center justify-between">
-                    <span>Inspected By: {user?.role === 'inspector' && <span className="text-rose-600">*</span>}</span>
+                    <span>Inspected By: {(user?.role === 'inspector' || (isAdmin && isSubmitted && !isVerified)) && <span className="text-rose-600">*</span>}</span>
                     <span className="text-[10px] font-semibold text-blue-700 uppercase bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                      {user?.role === 'inspector' ? 'Mandatory' : 'Inspector'}
+                      {(user?.role === 'inspector' || (isAdmin && isSubmitted && !isVerified)) ? 'Mandatory' : 'Inspector'}
                     </span>
                   </label>
                   <input
                     id="inspected-by-input"
                     type="text"
-                    disabled={isAdmin || user?.role === 'rpm' || isVerified}
+                    disabled={user?.role === 'rpm' || isVerified || (isAdmin && !isSubmitted)}
                     value={inspectedBy}
                     onChange={(e) => {
                       setInspectedBy(e.target.value);
@@ -2054,12 +2167,12 @@ export const InspectionForm: React.FC = () => {
                     </div>
                   ) : (
                     <div className="h-14 border-2 border-dashed border-slate-300 rounded-xl bg-white/60 flex items-center justify-center text-xs text-slate-400 my-2">
-                      {user?.role === 'inspector' ? '⚠️ Inspector Signature Required' : '(Pending Inspector sign-off)'}
+                      {(user?.role === 'inspector' || (isAdmin && isSubmitted && !isVerified)) ? '⚠️ Inspector Signature Required' : '(Pending Inspector sign-off)'}
                     </div>
                   )}
                 </div>
 
-                {!isAdmin && user?.role === 'inspector' && !isVerified ? (
+                {(user?.role === 'inspector' || (isAdmin && isSubmitted)) && !isVerified ? (
                   <div className="mt-1 print:hidden">
                     <SignatureSelector
                       label="Inspector Signature Picture *"
@@ -2102,7 +2215,7 @@ export const InspectionForm: React.FC = () => {
               ) : isSubmitted ? (
                 <span className="text-blue-700 font-semibold flex items-center gap-1.5">
                   <Clock className="w-4 h-4 text-blue-600" />
-                  <span>Submitted by RPM. Awaiting Inspector verification and sign-off.</span>
+                  <span>Submitted by RPM. Ready for inspection review and sign-off.</span>
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-slate-500">
@@ -2113,13 +2226,67 @@ export const InspectionForm: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-              {/* ADMIN ACTIONS (View-Only Mode) */}
+              {/* ADMIN ACTIONS */}
               {user?.role === 'admin' && (
                 <>
-                  <span className="text-xs font-bold text-purple-900 bg-purple-100 px-3 py-2 rounded-xl flex items-center gap-1.5 border border-purple-200">
-                    <ShieldCheck className="w-4 h-4 text-purple-700" />
-                    <span>Admin: View-Only</span>
-                  </span>
+                  {isSubmitted && !isVerified ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-xs font-bold text-purple-900 bg-purple-100 px-3 py-2 rounded-xl flex items-center gap-1.5 border border-purple-200">
+                        <ShieldCheck className="w-4 h-4 text-purple-700" />
+                        <span>Admin Inspection</span>
+                      </span>
+
+                      {/* ACCEPT BUTTON */}
+                      <button
+                        type="button"
+                        id="admin-accept-button"
+                        onClick={() => handleInspectorSubmit('Accepted')}
+                        disabled={isSavingDropbox}
+                        className="py-3 px-5 rounded-xl text-sm font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/25 transition cursor-pointer active:scale-95 disabled:opacity-60"
+                        title="Accept this room inspection (updates status to Accepted on Dashboard)"
+                      >
+                        {isSavingDropbox ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                            <span>Processing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5 text-white stroke-[2.5]" />
+                            <span>Accept Inspection</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* REJECT BUTTON */}
+                      <button
+                        type="button"
+                        id="admin-reject-button"
+                        onClick={() => handleInspectorSubmit('Rejected')}
+                        disabled={isSavingDropbox}
+                        className="py-3 px-5 rounded-xl text-sm font-extrabold bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition cursor-pointer active:scale-95 disabled:opacity-60"
+                        title="Reject this room inspection (updates status to Rejected on Dashboard)"
+                      >
+                        {isSavingDropbox ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                            <span>Processing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <X className="w-5 h-5 text-white stroke-[2.5]" />
+                            <span>Reject Inspection</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-xs font-bold text-purple-900 bg-purple-100 px-3 py-2 rounded-xl flex items-center gap-1.5 border border-purple-200">
+                      <ShieldCheck className="w-4 h-4 text-purple-700" />
+                      <span>{isVerified ? 'Admin Mode (Verified)' : 'Admin Mode: View-Only'}</span>
+                    </span>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => handleDownloadPdf('RPM')}

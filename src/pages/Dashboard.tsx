@@ -16,19 +16,23 @@ import {
   Check,
   Building2,
   ShieldCheck,
-  FileDown,
   ClipboardCheck,
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Bell,
+  Calendar,
   Eye,
+  User,
+  UserCheck,
+  Users,
+  Wrench,
+  History,
 } from 'lucide-react';
 
 // Static template matrix containing exact room layout and initial fallback
 import { RAW_CSV_ROWS, type RawCell } from '../data/rpmCsvData';
-import maxwellInspectionData from '../data/Maxwell_Inspection_List.json';
 import { downloadPdfBlob } from '../services/pdfGenerator';
+import { RoomAllDetailsModal } from '../components/RoomAllDetailsModal';
+import { PendingInspectionLoginModal } from '../components/PendingInspectionLoginModal';
+import type { PendingInspectionItem } from '../components/InspectionNotificationBell';
 
 interface TableCell {
   room: string;
@@ -37,6 +41,8 @@ interface TableCell {
   status: string;
   isPublicHeader?: boolean;
   recordId?: number;
+  rpmBy?: string;
+  inspBy?: string;
 }
 
 interface TableRow {
@@ -77,8 +83,33 @@ export const Dashboard: React.FC = () => {
 
   // Defect notification state for Inspector & Admin
   const [defectiveInspections, setDefectiveInspections] = useState<any[]>([]);
-  const [isDefectBannerDismissed, setIsDefectBannerDismissed] = useState<boolean>(false);
-  const [isDefectListExpanded, setIsDefectListExpanded] = useState<boolean>(false);
+
+  // All inspections list for Admin submitter inspection lookup & submissions log
+  const [allInspectionsList, setAllInspectionsList] = useState<any[]>([]);
+  const [isSubmissionsModalOpen, setIsSubmissionsModalOpen] = useState<boolean>(false);
+  const [submissionsSearch, setSubmissionsSearch] = useState<string>('');
+
+  // Room All Details Modal state for Admin
+  const [adminDetailRoom, setAdminDetailRoom] = useState<string | null>(null);
+  const [isRoomDetailsModalOpen, setIsRoomDetailsModalOpen] = useState<boolean>(false);
+
+  // Pending inspections awaiting inspection for Inspector & Admin
+  const [pendingInspectionsList, setPendingInspectionsList] = useState<PendingInspectionItem[]>([]);
+  const [isLoginPopupOpen, setIsLoginPopupOpen] = useState<boolean>(false);
+
+  // Search suggestion and dropdown state
+  const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState<boolean>(false);
+  const searchContainerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setIsSearchDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Load records from backend API
   const loadData = async () => {
@@ -96,12 +127,13 @@ export const Dashboard: React.FC = () => {
         setRecords(data);
       }
 
-      // Fetch defects for Inspector & Admin notification showcase
+      // Fetch inspections for Inspector & Admin
       if (isAdmin || isInspector) {
         try {
           const allInspections = await api.getInspections({
             property_name: selectedProperty,
           });
+          setAllInspectionsList(allInspections || []);
           const flagged = (allInspections || []).filter((insp: any) => {
             return (
               Array.isArray(insp.items) &&
@@ -109,6 +141,68 @@ export const Dashboard: React.FC = () => {
             );
           });
           setDefectiveInspections(flagged);
+
+          // Fetch pending inspections across all properties for Inspector & Admin notification
+          const pendingResp = await api.getInspections({ status: 'submitted' }, true).catch(() => []);
+          const pendingArr: PendingInspectionItem[] = [];
+          const seen = new Set<string>();
+
+          if (Array.isArray(pendingResp)) {
+            pendingResp.forEach((insp: any) => {
+              const room = String(insp.room_number || '').trim();
+              const clean = room.replace(/room\s*/i, '').trim();
+              const prop = insp.property_name || 'Maxwell';
+              const quarter = insp.quarter || 'Current Quarter';
+              const matchYear = String(insp.inspection_date || '').match(/\b(20\d\d)\b/);
+              const year = matchYear ? parseInt(matchYear[1], 10) : 2026;
+              const key = `${prop.toLowerCase().trim()}__${clean.toLowerCase().trim()}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                pendingArr.push({
+                  key,
+                  inspectionId: insp.id,
+                  roomNumber: clean,
+                  propertyName: prop,
+                  quarter,
+                  year,
+                  rpmDate: insp.inspection_date,
+                  technician: insp.maintenance_carried_by || 'RPM Technician',
+                });
+              }
+            });
+          }
+
+          const rpmPending = await api.getRpmRecords({ status: 'Pending' }, true).catch(() => []);
+          if (Array.isArray(rpmPending)) {
+            rpmPending.forEach((r: any) => {
+              if ((r.rpm_date || r.eng_date) && !r.inspection_date) {
+                const clean = String(r.room_or_area || '').toLowerCase().replace(/room\s*/i, '').trim();
+                const prop = r.property_name || 'Maxwell';
+                const quarter = r.quarter || 'Current Quarter';
+                const year = r.year || 2026;
+                const key = `${prop.toLowerCase().trim()}__${clean.toLowerCase().trim()}`;
+                if (!seen.has(key)) {
+                  seen.add(key);
+                  pendingArr.push({
+                    key,
+                    roomNumber: clean,
+                    propertyName: prop,
+                    quarter,
+                    year,
+                    rpmDate: r.rpm_date || r.eng_date,
+                    technician: r.maintenance_carried_by || 'RPM Technician',
+                  });
+                }
+              }
+            });
+          }
+
+          setPendingInspectionsList(pendingArr);
+
+          // Check if login popup should be shown (once per session)
+          if (pendingArr.length > 0 && !sessionStorage.getItem('hasSeenInspectionLoginPopup')) {
+            setIsLoginPopupOpen(true);
+          }
         } catch (e) {
           console.warn('Inspection defects fetch note:', e);
         }
@@ -147,6 +241,23 @@ export const Dashboard: React.FC = () => {
     return `${selectedQuarter} ${shortYr}`;
   }, [selectedQuarter, selectedYear]);
 
+  // Map of inspection records by room number (for submitter & inspector lookup)
+  const inspectionsByRoom = useMemo(() => {
+    const map: Record<string, { rpmBy?: string; inspBy?: string; status?: string; date?: string }> = {};
+    allInspectionsList.forEach((insp: any) => {
+      const clean = (insp.room_number || '').toLowerCase().replace(/room\s*/i, '').trim();
+      if (!map[clean] || (insp.quarter && insp.quarter === selectedQuarter)) {
+        map[clean] = {
+          rpmBy: insp.maintenance_carried_by || undefined,
+          inspBy: insp.inspected_by || undefined,
+          status: insp.status,
+          date: insp.inspection_date,
+        };
+      }
+    });
+    return map;
+  }, [allInspectionsList, selectedQuarter]);
+
   // Construct table rows structured identically to the 4-floor layout
   const tableRows: TableRow[] = useMemo(() => {
     return RAW_CSV_ROWS.map((row) => {
@@ -161,12 +272,15 @@ export const Dashboard: React.FC = () => {
           const cleanR = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
           return cleanR === cleanDefault || r.room_or_area.toLowerCase().trim() === roomName.toLowerCase().trim();
         });
+        const inspInfo = inspectionsByRoom[cleanDefault];
 
         if (matched) {
           const rpmDate = matched.rpm_date || matched.eng_date || '';
           const inspectionDate = matched.inspection_date || '';
           const rawStatus = matched.inspection_status || '';
           const status = rawStatus || (rpmDate ? 'Pending' : '');
+          const rpmBy = matched.maintenance_carried_by || inspInfo?.rpmBy || '';
+          const inspBy = matched.inspected_by || inspInfo?.inspBy || '';
 
           return {
             room: matched.room_or_area,
@@ -175,6 +289,8 @@ export const Dashboard: React.FC = () => {
             status: status,
             isPublicHeader: defaultCell.isPublicHeader,
             recordId: matched.id,
+            rpmBy,
+            inspBy,
           };
         }
 
@@ -184,6 +300,8 @@ export const Dashboard: React.FC = () => {
           inspection: '',
           status: '',
           isPublicHeader: defaultCell.isPublicHeader,
+          rpmBy: inspInfo?.rpmBy || '',
+          inspBy: inspInfo?.inspBy || '',
         };
       };
 
@@ -194,7 +312,7 @@ export const Dashboard: React.FC = () => {
         block4: findUpdated(row.block4.room, row.block4),
       };
     });
-  }, [records, selectedYear, selectedQuarter, statusFilter, searchQuery]);
+  }, [records, selectedYear, selectedQuarter, statusFilter, searchQuery, inspectionsByRoom]);
 
   const handleToggleCellStatus = async (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader) return;
@@ -241,29 +359,6 @@ export const Dashboard: React.FC = () => {
 
   const blockColSpan = isAdmin ? 5 : 4;
 
-  // Template sections loaded directly from Maxwell_Inspection_List.json
-  const [templateSections, setTemplateSections] = useState<any[]>(
-    (maxwellInspectionData.sections as any[]) || []
-  );
-
-  useEffect(() => {
-    // Background refresh if API has any updates
-    api.getTemplate().then((data) => {
-      if (data?.sections) setTemplateSections(data.sections);
-    }).catch(() => {});
-  }, []);
-
-  // Checklist item description lookup from live template
-  const itemDescMap = useMemo(() => {
-    const map: Record<number, string> = {};
-    templateSections.forEach((s) => {
-      s.items?.forEach((it: any) => {
-        map[it.id] = it.description;
-      });
-    });
-    return map;
-  }, [templateSections]);
-
   // Room defects map for badge display in table
   const roomDefectsMap = useMemo(() => {
     const map: Record<string, { count: number; items: any[]; status: string; inspectionId: number; technician?: string; date?: string }> = {};
@@ -284,6 +379,71 @@ export const Dashboard: React.FC = () => {
     return map;
   }, [defectiveInspections]);
 
+  // Aggregated list of all rooms with form submissions for Admin Submissions Log Modal
+  const submittedRoomsLog = useMemo(() => {
+    const list: Array<{
+      room: string;
+      rpmDate: string;
+      rpmBy: string;
+      inspectionDate: string;
+      inspBy: string;
+      status: string;
+      quarter?: string;
+    }> = [];
+
+    records.forEach((r) => {
+      const clean = r.room_or_area.toLowerCase().replace(/room\s*/i, '').trim();
+      const inspInfo = inspectionsByRoom[clean];
+      const hasRpm = !!(r.rpm_date || r.eng_date || inspInfo?.rpmBy);
+      const hasInsp = !!(r.inspection_date || inspInfo?.inspBy);
+      if (hasRpm || hasInsp) {
+        list.push({
+          room: r.room_or_area,
+          rpmDate: r.rpm_date || r.eng_date || '',
+          rpmBy: r.maintenance_carried_by || inspInfo?.rpmBy || '',
+          inspectionDate: r.inspection_date || inspInfo?.date || '',
+          inspBy: r.inspected_by || inspInfo?.inspBy || '',
+          status: r.inspection_status || inspInfo?.status || 'Pending',
+          quarter: r.quarter,
+        });
+      }
+    });
+
+    allInspectionsList.forEach((insp: any) => {
+      const inspRoom = insp.room_number || '';
+      const clean = inspRoom.toLowerCase().replace(/room\s*/i, '').trim();
+      const already = list.some((item) => item.room.toLowerCase().replace(/room\s*/i, '').trim() === clean);
+      if (!already) {
+        list.push({
+          room: inspRoom.toLowerCase().includes('room') ? inspRoom : `Room ${inspRoom}`,
+          rpmDate: insp.inspection_date || '',
+          rpmBy: insp.maintenance_carried_by || '',
+          inspectionDate: insp.status === 'verified' || insp.status === 'rejected' ? insp.inspection_date : '',
+          inspBy: insp.inspected_by || '',
+          status: insp.status === 'verified' ? 'Accepted' : (insp.status === 'rejected' ? 'Rejected' : 'Pending'),
+          quarter: insp.quarter,
+        });
+      }
+    });
+
+    return list.sort((a, b) => a.room.localeCompare(b.room, undefined, { numeric: true }));
+  }, [records, inspectionsByRoom, allInspectionsList]);
+
+  // Filtered submissions in modal
+  const filteredSubmissionsLog = useMemo(() => {
+    if (!submissionsSearch.trim()) return submittedRoomsLog;
+    const q = submissionsSearch.toLowerCase().trim();
+    return submittedRoomsLog.filter(
+      (item) =>
+        item.room.toLowerCase().includes(q) ||
+        item.rpmBy.toLowerCase().includes(q) ||
+        item.inspBy.toLowerCase().includes(q) ||
+        item.status.toLowerCase().includes(q) ||
+        item.rpmDate.toLowerCase().includes(q) ||
+        item.inspectionDate.toLowerCase().includes(q)
+    );
+  }, [submittedRoomsLog, submissionsSearch]);
+
   const handleOpenForm = (roomName: string, rpmDate?: string) => {
     if ((isInspector || isAdmin) && rpmDate !== undefined && !rpmDate) {
       showToast(`${isAdmin ? 'Admin' : 'Inspectors'} can only view forms that have an RPM date. Room ${roomName} has no RPM submission yet.`, 'info');
@@ -300,6 +460,58 @@ export const Dashboard: React.FC = () => {
     }
     const cleanRoom = roomName.replace(/Room\s*/i, '').trim();
     navigate(`/form?room=${encodeURIComponent(cleanRoom)}&property=${encodeURIComponent(selectedProperty)}`);
+  };
+
+  const handleOpenRoomDetails = (roomName: string) => {
+    const clean = roomName.replace(/room\s*/i, '').trim();
+    if (!clean) return;
+    setAdminDetailRoom(clean);
+    setIsRoomDetailsModalOpen(true);
+  };
+
+  // List of all room numbers for Admin quick room details selector
+  const allAvailableRooms = useMemo(() => {
+    const set = new Set<string>();
+    RAW_CSV_ROWS.forEach((r) => {
+      [r.block1.room, r.block2.room, r.block3.room, r.block4.room].forEach((rm) => {
+        if (rm && !rm.toLowerCase().includes('public')) {
+          set.add(rm.replace(/room\s*/i, '').trim());
+        }
+      });
+    });
+    records.forEach((r) => {
+      if (r.room_or_area && !r.room_or_area.toLowerCase().includes('public')) {
+        set.add(r.room_or_area.replace(/room\s*/i, '').trim());
+      }
+    });
+    allInspectionsList.forEach((insp) => {
+      if (insp.room_number) {
+        set.add(String(insp.room_number).replace(/room\s*/i, '').trim());
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [records, allInspectionsList]);
+
+  // Filtered room suggestions for searchable room selection
+  const filteredRoomSuggestions = useMemo(() => {
+    const q = searchQuery.toLowerCase().replace(/room\s*/i, '').trim();
+    if (!q) return allAvailableRooms.slice(0, 15);
+    return allAvailableRooms.filter((rm) => rm.toLowerCase().includes(q)).slice(0, 15);
+  }, [searchQuery, allAvailableRooms]);
+
+  // Current room resolved from search bar for All Details
+  const activeSearchedRoom = useMemo(() => {
+    const q = searchQuery.toLowerCase().replace(/room\s*/i, '').trim();
+    if (!q) return null;
+    const exact = allAvailableRooms.find((rm) => rm.toLowerCase() === q);
+    if (exact) return exact;
+    const partial = allAvailableRooms.find((rm) => rm.toLowerCase().includes(q));
+    return partial || q;
+  }, [searchQuery, allAvailableRooms]);
+
+  const handleCloseLoginPopup = () => {
+    sessionStorage.setItem('hasSeenInspectionLoginPopup', 'true');
+    setIsLoginPopupOpen(false);
   };
 
   // Search match helper
@@ -485,8 +697,8 @@ export const Dashboard: React.FC = () => {
       );
     }
 
-    // For Inspector role: can inspect if room has an RPM date
-    if (user?.role === 'inspector') {
+    // For Inspector or Admin role: can inspect if room has an RPM date
+    if (user?.role === 'inspector' || isAdmin) {
       if (cell.rpm) {
         return (
           <button
@@ -503,7 +715,7 @@ export const Dashboard: React.FC = () => {
       return (
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
-          title={`Room ${cell.room} has no RPM date yet. Inspectors can only inspect forms that have an RPM date.`}
+          title={`Room ${cell.room} has no RPM date yet. Forms can only be inspected after RPM is submitted.`}
         >
           <span>Pending RPM</span>
         </span>
@@ -528,29 +740,32 @@ export const Dashboard: React.FC = () => {
     );
   };
 
-  // Helper renderer for Admin View button (opens submitted form in read-only mode)
+  // Helper renderer for Admin View & All Details buttons
   const renderShowButton = (cell: TableCell) => {
     if (!cell.room || cell.isPublicHeader) return null;
-    if (!cell.rpm) {
-      return (
-        <span
-          className="text-slate-300 text-xs font-semibold cursor-not-allowed select-none"
-          title={`Room ${cell.room} has no RPM submission yet. Admin can only view forms that have an RPM date.`}
-        >
-          —
-        </span>
-      );
-    }
     return (
-      <button
-        type="button"
-        onClick={() => handleAdminView(cell.room, cell.rpm)}
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition cursor-pointer shadow-sm active:scale-95"
-        title={`View submitted form for Room ${cell.room} (Read-Only)`}
-      >
-        <Eye className="w-3 h-3 text-purple-700" />
-        <span>View</span>
-      </button>
+      <div className="flex items-center justify-center gap-1">
+        {cell.rpm ? (
+          <button
+            type="button"
+            onClick={() => handleAdminView(cell.room, cell.rpm)}
+            className="inline-flex items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-bold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition cursor-pointer shadow-xs active:scale-95"
+            title={`View submitted form for Room ${cell.room} (Read-Only)${cell.rpmBy ? ` • RPM by: ${cell.rpmBy}` : ''}${cell.inspBy ? ` • Inspected by: ${cell.inspBy}` : ''}`}
+          >
+            <Eye className="w-3 h-3 text-purple-700 flex-shrink-0" />
+            <span>View</span>
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => handleOpenRoomDetails(cell.room)}
+          className="inline-flex items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 transition cursor-pointer shadow-xs active:scale-95"
+          title={`All Details: View historical quarters, defect logs, submission dates, and stats for Room ${cell.room}`}
+        >
+          <History className="w-3 h-3 text-indigo-700 flex-shrink-0" />
+          <span>Details</span>
+        </button>
+      </div>
     );
   };
 
@@ -612,6 +827,7 @@ export const Dashboard: React.FC = () => {
         year: selectedYear,
         quarter: selectedQuarter,
         document_type: 'RPM',
+        property_name: selectedProperty,
       });
       downloadPdfBlob(blob, filename);
       showToast(`Downloaded ${filename}`, 'info');
@@ -624,21 +840,29 @@ export const Dashboard: React.FC = () => {
   const renderRpmDate = (cell: TableCell) => {
     if (!cell.rpm) return <span className="text-slate-300 text-[11px]">—</span>;
     return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          handleDownloadRpmPdf(cell);
-        }}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 hover:bg-emerald-100 hover:border-emerald-300 transition cursor-pointer group"
-        title={`Download RPM PDF for ${cell.room}`}
-      >
-        <FileDown className="w-3 h-3 text-emerald-500 group-hover:text-emerald-700 transition" />
-        <span>{cell.rpm}</span>
-      </button>
+      <div className="flex flex-col items-center gap-1 py-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDownloadRpmPdf(cell);
+          }}
+          className="inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-700 font-semibold hover:text-emerald-700 transition cursor-pointer group"
+          title={`Download RPM PDF for ${cell.room}${cell.rpmBy ? ` • RPM Submitted by: ${cell.rpmBy}` : ''}`}
+        >
+          <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 transition flex-shrink-0" />
+          <span>{cell.rpm}</span>
+        </button>
+        <span
+          className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-xl text-xs font-bold bg-emerald-100 text-emerald-950 border border-emerald-300 shadow-xs max-w-[140px] truncate"
+          title={`RPM Form Submitted By: ${cell.rpmBy || 'RPM Technician'}`}
+        >
+          <Wrench className="w-3 h-3 text-emerald-700 flex-shrink-0" />
+          <span className="truncate">{cell.rpmBy || 'RPM Technician'}</span>
+        </span>
+      </div>
     );
   };
-
 
   // Download inspection PDF from Dropbox
   const handleDownloadInspectionPdf = async (cell: TableCell) => {
@@ -651,6 +875,7 @@ export const Dashboard: React.FC = () => {
         year: selectedYear,
         quarter: selectedQuarter,
         document_type: 'Inspection',
+        property_name: selectedProperty,
       });
       downloadPdfBlob(blob, filename);
       showToast(`Downloaded ${filename}`, 'info');
@@ -663,18 +888,27 @@ export const Dashboard: React.FC = () => {
   const renderInspectionDate = (cell: TableCell) => {
     if (!cell.inspection) return <span className="text-slate-300 text-[11px]">—</span>;
     return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          handleDownloadInspectionPdf(cell);
-        }}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-blue-50 text-blue-700 border border-blue-200/80 hover:bg-blue-100 hover:border-blue-300 transition cursor-pointer group"
-        title={`Download inspection PDF for ${cell.room}`}
-      >
-        <FileDown className="w-3 h-3 text-blue-500 group-hover:text-blue-700 transition" />
-        <span>{cell.inspection}</span>
-      </button>
+      <div className="flex flex-col items-center gap-1 py-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDownloadInspectionPdf(cell);
+          }}
+          className="inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-700 font-semibold hover:text-violet-700 transition cursor-pointer group"
+          title={`Download inspection PDF for ${cell.room}${cell.inspBy ? ` • Inspection Verified by: ${cell.inspBy}` : ''}`}
+        >
+          <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover:text-violet-600 transition flex-shrink-0" />
+          <span>{cell.inspection}</span>
+        </button>
+        <span
+          className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-xl text-xs font-bold bg-violet-100 text-violet-950 border border-violet-300 shadow-xs max-w-[140px] truncate"
+          title={`Inspection Form Verified By: ${cell.inspBy || 'Inspector'}`}
+        >
+          <UserCheck className="w-3 h-3 text-violet-700 flex-shrink-0" />
+          <span className="truncate">{cell.inspBy || 'Inspector'}</span>
+        </span>
+      </div>
     );
   };
 
@@ -771,24 +1005,93 @@ export const Dashboard: React.FC = () => {
               </select>
             </div>
 
-            {/* Live Search Input */}
-            <div className="relative flex items-center">
-              <Search className="w-3.5 h-3.5 absolute left-3 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search room (e.g. 201, Gym)..."
-                className="py-2 pl-8 pr-8 rounded-xl text-xs font-medium bg-slate-50 border border-slate-300 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 w-[190px] sm:w-[220px] shadow-sm transition"
-              />
-              {searchQuery && (
+            {/* Unified Search & Room Selection with All Details */}
+            <div className="relative flex items-center gap-1.5" ref={searchContainerRef}>
+              <div className="relative flex items-center">
+                <Search className="w-3.5 h-3.5 absolute left-3 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onFocus={() => setIsSearchDropdownOpen(true)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setIsSearchDropdownOpen(true);
+                  }}
+                  placeholder="Search room (e.g. 101, Gym)..."
+                  className="py-2 pl-8 pr-8 rounded-xl text-xs font-medium bg-slate-50 border border-slate-300 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 w-[190px] sm:w-[220px] shadow-sm transition"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setIsSearchDropdownOpen(false);
+                    }}
+                    className="absolute right-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Admin All Details Button directly integrated with Search */}
+              {isAdmin && (
                 <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                  title="Clear search"
+                  type="button"
+                  onClick={() => {
+                    const targetRoom = activeSearchedRoom || (allAvailableRooms.length > 0 ? allAvailableRooms[0] : '101');
+                    handleOpenRoomDetails(targetRoom);
+                  }}
+                  className="py-2 px-3 rounded-xl text-xs font-extrabold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer whitespace-nowrap"
+                  title={
+                    activeSearchedRoom
+                      ? `Open all details for Room ${activeSearchedRoom}`
+                      : 'Open room all details'
+                  }
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <History className="w-3.5 h-3.5 text-indigo-200 flex-shrink-0" />
+                  <span>All Details{activeSearchedRoom ? ` (${activeSearchedRoom})` : ''}</span>
                 </button>
+              )}
+
+              {/* Search Suggestions Dropdown */}
+              {isSearchDropdownOpen && filteredRoomSuggestions.length > 0 && (
+                <div className="absolute top-full left-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 py-1.5 max-h-60 overflow-y-auto animate-in fade-in duration-100">
+                  <div className="px-3 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
+                    <span>Rooms ({filteredRoomSuggestions.length})</span>
+                    <span className="text-[9px] text-slate-400 font-normal">Click to search</span>
+                  </div>
+                  {filteredRoomSuggestions.map((rm) => (
+                    <div
+                      key={rm}
+                      className="px-3 py-1.5 hover:bg-amber-50/70 flex items-center justify-between gap-2 cursor-pointer transition group"
+                      onClick={() => {
+                        setSearchQuery(rm);
+                        setIsSearchDropdownOpen(false);
+                      }}
+                    >
+                      <span className="text-xs font-bold text-slate-800 group-hover:text-amber-900">
+                        Room {rm}
+                      </span>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsSearchDropdownOpen(false);
+                            setSearchQuery(rm);
+                            handleOpenRoomDetails(rm);
+                          }}
+                          className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200 transition cursor-pointer"
+                          title={`View all details for Room ${rm}`}
+                        >
+                          All Details
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -827,6 +1130,30 @@ export const Dashboard: React.FC = () => {
               <span>Download CSV</span>
             </button>
 
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setIsSubmissionsModalOpen(true)}
+                className="py-2.5 px-4 rounded-xl text-xs font-extrabold bg-purple-700 hover:bg-purple-800 text-white flex items-center gap-2 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
+                title="View form submissions log: See who submitted RPM & Inspection forms"
+              >
+                <Users className="w-4 h-4 text-purple-200" />
+                <span>Submissions Log</span>
+              </button>
+            )}
+
+            {defectiveInspections.length > 0 && (isAdmin || isInspector) && (
+              <button
+                type="button"
+                onClick={() => navigate('/defects')}
+                className="py-2.5 px-4 rounded-xl text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-2 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
+                title={`Open Separate Defects Dashboard (${defectiveInspections.length} defected rooms)`}
+              >
+                <AlertTriangle className="w-4 h-4 text-white" />
+                <span>Defects ({defectiveInspections.length})</span>
+              </button>
+            )}
+
             {!isInspector && !isAdmin && (
               <button
                 type="button"
@@ -840,146 +1167,6 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
         </div>
-
-        {/* RPM Defect Notification Banner for Inspector & Admin */}
-        {(isAdmin || isInspector) && defectiveInspections.length > 0 && !isDefectBannerDismissed && (
-          <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 border-2 border-rose-300 rounded-2xl p-4 sm:p-5 shadow-md space-y-3">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow flex-shrink-0 animate-bounce">
-                  <AlertTriangle className="w-5 h-5 stroke-[2.5]" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-sm font-extrabold text-rose-950 uppercase tracking-wide">
-                      RPM Defect Alert: {defectiveInspections.length} Room{defectiveInspections.length > 1 ? 's' : ''} Require Attention
-                    </h4>
-                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-rose-600 text-white animate-pulse">
-                      Defects Reported
-                    </span>
-                  </div>
-                  <p className="text-xs text-rose-800/90 font-medium mt-0.5">
-                    RPM technician noted maintenance defects in submitted checklist reports. Review defects and verify rectification status.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => setIsDefectListExpanded(!isDefectListExpanded)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/90 hover:bg-white text-slate-800 border border-rose-200 shadow-sm transition cursor-pointer"
-                >
-                  <span>{isDefectListExpanded ? 'Hide Details' : 'View Defect Breakdown'}</span>
-                  {isDefectListExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsDefectBannerDismissed(true)}
-                  className="p-1.5 rounded-xl text-rose-700 hover:bg-rose-200/60 transition cursor-pointer"
-                  title="Dismiss notification banner"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Fast Action Room Badges */}
-            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-rose-200/60">
-              <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-900 mr-1 flex items-center gap-1">
-                <Bell className="w-3 h-3 text-rose-600" />
-                Flagged Rooms:
-              </span>
-              {defectiveInspections.map((insp) => {
-                const fails = (insp.items || []).filter((it: any) => it.result?.toLowerCase() === 'fail');
-                const isVerified = insp.status === 'verified';
-                return (
-                  <button
-                    key={insp.id}
-                    type="button"
-                    onClick={() => handleOpenForm(insp.room_number)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer border hover:scale-105 active:scale-95 ${isVerified
-                        ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
-                        : 'bg-rose-600 hover:bg-rose-700 text-white border-rose-700'
-                      }`}
-                    title={`Open Room ${insp.room_number} form`}
-                  >
-                    <span>Room {insp.room_number}</span>
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${isVerified ? 'bg-amber-200 text-amber-900' : 'bg-rose-800 text-rose-100'}`}>
-                      {fails.length} Defect{fails.length > 1 ? 's' : ''}
-                    </span>
-                    <span className="text-[10px] opacity-80 uppercase">
-                      ({isVerified ? 'Verified' : 'Pending Review'})
-                    </span>
-                    <ExternalLink className="w-3 h-3 opacity-70" />
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Collapsible Defect Items Details */}
-            {isDefectListExpanded && (
-              <div className="mt-3 pt-3 border-t border-rose-200/80 bg-white/95 rounded-xl p-3 sm:p-4 shadow-inner space-y-3">
-                <h5 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
-                  Detailed Defect Breakdown by Room:
-                </h5>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {defectiveInspections.map((insp) => {
-                    const fails = (insp.items || []).filter((it: any) => it.result?.toLowerCase() === 'fail');
-                    return (
-                      <div
-                        key={`detail-${insp.id}`}
-                        className="bg-rose-50/50 rounded-xl p-3 border border-rose-200 space-y-2 text-xs"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-extrabold text-slate-900 text-sm">
-                            Room {insp.room_number}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenForm(insp.room_number)}
-                            className="text-[11px] font-bold text-blue-600 hover:underline inline-flex items-center gap-0.5 cursor-pointer"
-                          >
-                            <span>Inspect</span>
-                            <ExternalLink className="w-2.5 h-2.5" />
-                          </button>
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          <span>Tech: <strong className="text-slate-700">{insp.maintenance_carried_by || 'RPM Staff'}</strong></span>
-                          <span className="mx-1.5">•</span>
-                          <span>Date: <strong className="text-slate-700">{insp.inspection_date || '—'}</strong></span>
-                        </div>
-                        <div className="space-y-1.5 pt-1 border-t border-rose-200/60">
-                          {fails.map((f: any, idx: number) => {
-                            const desc = itemDescMap[f.checklist_item_id] || `Checklist Item #${f.checklist_item_id}`;
-                            return (
-                              <div key={idx} className="bg-white rounded-lg p-2 border border-rose-200 text-slate-800">
-                                <div className="font-semibold text-[11px] text-rose-900 flex items-center gap-1">
-                                  <AlertTriangle className="w-3 h-3 text-rose-600 flex-shrink-0" />
-                                  <span>{desc}</span>
-                                </div>
-                                {f.remark && (
-                                  <div className="text-[11px] text-slate-600 italic mt-0.5 pl-4">
-                                    "{f.remark}"
-                                  </div>
-                                )}
-                                {f.inspector_remark && (
-                                  <div className="text-[11px] text-blue-700 font-medium mt-0.5 pl-4">
-                                    Inspector: "{f.inspector_remark}"
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Modern 4-Block Level Grid Interface */}
         {isBackendConnected === false ? (
@@ -1056,29 +1243,53 @@ export const Dashboard: React.FC = () => {
                   <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-extrabold text-slate-600 uppercase tracking-wider">
                     {/* Block 1 */}
                     <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>RPM</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-emerald-700/80 normal-case tracking-normal">Date & Submitter</div>}
+                    </th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>Inspection</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-blue-700/80 normal-case tracking-normal">Date & Inspector</div>}
+                    </th>
                     <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
                     {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
                     {/* Block 2 */}
                     <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>RPM</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-emerald-700/80 normal-case tracking-normal">Date & Submitter</div>}
+                    </th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>Inspection</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-blue-700/80 normal-case tracking-normal">Date & Inspector</div>}
+                    </th>
                     <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
                     {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
                     {/* Block 3 */}
                     <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>RPM</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-emerald-700/80 normal-case tracking-normal">Date & Submitter</div>}
+                    </th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>Inspection</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-blue-700/80 normal-case tracking-normal">Date & Inspector</div>}
+                    </th>
                     <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : 'border-r-2 border-slate-300'} text-center`}>Status</th>
                     {isAdmin && <th className="py-2.5 px-2 border-r-2 border-slate-300 text-center">View</th>}
 
                     {/* Block 4 */}
                     <th className="py-2.5 px-3 border-r border-slate-100">Room No</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">RPM</th>
-                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">Inspection</th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>RPM</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-emerald-700/80 normal-case tracking-normal">Date & Submitter</div>}
+                    </th>
+                    <th className="py-2.5 px-2 border-r border-slate-100 text-center">
+                      <div>Inspection</div>
+                      {isAdmin && <div className="text-[9px] font-bold text-blue-700/80 normal-case tracking-normal">Date & Inspector</div>}
+                    </th>
                     <th className={`py-2.5 px-2 ${isAdmin ? 'border-r border-slate-100' : ''} text-center`}>Status</th>
                     {isAdmin && <th className="py-2.5 px-2 text-center">View</th>}
                   </tr>
@@ -1218,11 +1429,228 @@ export const Dashboard: React.FC = () => {
                   </span>
                   <span className="text-slate-600 text-[11px]">Pending Inspection</span>
                 </div>
+                {isAdmin && (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        <User className="w-2.5 h-2.5 text-emerald-600" /> Name
+                      </span>
+                      <span className="text-slate-600 text-[11px]">RPM Submitter</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                        <UserCheck className="w-2.5 h-2.5 text-blue-600" /> Name
+                      </span>
+                      <span className="text-slate-600 text-[11px]">Inspector</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
         )}
       </main>
+
+      {/* Admin Submissions Log Modal */}
+      {isAdmin && isSubmissionsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[85vh] overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-600/50 border border-purple-400/40 flex items-center justify-center shadow">
+                  <Users className="w-5 h-5 text-purple-200" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold tracking-wide">Form Submissions Log</h3>
+                  <p className="text-xs text-purple-200/80">
+                    Who submitted forms: RPM Technicians & Inspection Sign-offs ({selectedProperty} • {quarterHeaderTitle})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSubmissionsModalOpen(false)}
+                className="p-2 rounded-xl text-purple-200 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                title="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Sub-Bar / Search */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={submissionsSearch}
+                  onChange={(e) => setSubmissionsSearch(e.target.value)}
+                  placeholder="Search room, technician, or inspector..."
+                  className="w-full pl-9 pr-8 py-2 rounded-xl text-xs font-medium bg-white border border-slate-300 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
+                />
+                {submissionsSearch && (
+                  <button
+                    onClick={() => setSubmissionsSearch('')}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <div className="text-xs text-slate-500 font-semibold self-end sm:self-auto">
+                Showing {filteredSubmissionsLog.length} of {submittedRoomsLog.length} submitted form{submittedRoomsLog.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+
+            {/* Modal Body / Table */}
+            <div className="overflow-y-auto p-4 flex-1">
+              {filteredSubmissionsLog.length === 0 ? (
+                <div className="text-center py-16 text-slate-400">
+                  <Users className="w-12 h-12 mx-auto mb-3 text-slate-300 stroke-1" />
+                  <p className="text-sm font-bold text-slate-600">No form submissions found</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {submissionsSearch ? 'Try a different search query.' : 'No rooms have submitted forms yet for this property/quarter.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700 font-extrabold uppercase text-[11px] border-b border-slate-200">
+                        <th className="py-2.5 px-3">Room</th>
+                        <th className="py-2.5 px-3">RPM Form Submitted By</th>
+                        <th className="py-2.5 px-3">RPM Date</th>
+                        <th className="py-2.5 px-3">Inspection Verified By</th>
+                        <th className="py-2.5 px-3">Inspection Date</th>
+                        <th className="py-2.5 px-3 text-center">Status</th>
+                        <th className="py-2.5 px-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {filteredSubmissionsLog.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50 transition">
+                          <td className="py-2.5 px-3 font-bold text-slate-900 whitespace-nowrap">
+                            {item.room}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {item.rpmBy ? (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-950 border border-emerald-300 shadow-xs">
+                                <Wrench className="w-3 h-3 text-emerald-700 flex-shrink-0" />
+                                <span>{item.rpmBy}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">Not submitted</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                              <Calendar className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                              <span>{item.rpmDate || '—'}</span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {item.inspBy ? (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-violet-100 text-violet-950 border border-violet-300 shadow-xs">
+                                <UserCheck className="w-3 h-3 text-violet-700 flex-shrink-0" />
+                                <span>{item.inspBy}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">Pending Inspector</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600">
+                              <Calendar className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                              <span>{item.inspectionDate || '—'}</span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                item.status === 'Accepted' || item.status === 'Done'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : item.status === 'Rejected'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                              }`}
+                            >
+                              {item.status}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            <div className="inline-flex items-center gap-1.5">
+                              {item.rpmDate ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsSubmissionsModalOpen(false);
+                                    handleAdminView(item.room, item.rpmDate);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 transition cursor-pointer shadow-xs active:scale-95"
+                                  title={`View Room ${item.room} form (Read-Only)`}
+                                >
+                                  <Eye className="w-3 h-3 text-purple-700" />
+                                  <span>View Form</span>
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsSubmissionsModalOpen(false);
+                                  handleOpenRoomDetails(item.room);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-100 hover:bg-indigo-200 text-indigo-950 border border-indigo-300 transition cursor-pointer shadow-xs active:scale-95"
+                                title={`All Details: View historical quarters, defect logs, and stats for Room ${item.room}`}
+                              >
+                                <History className="w-3 h-3 text-indigo-700" />
+                                <span>All Details</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              <span className="text-xs text-slate-500">
+                Click <strong>View Form</strong> to see form or <strong>All Details</strong> for complete room history.
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsSubmissionsModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-900 text-white transition cursor-pointer shadow-sm active:scale-95"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Room All Details Modal for Admin */}
+      {isAdmin && adminDetailRoom && (
+        <RoomAllDetailsModal
+          isOpen={isRoomDetailsModalOpen}
+          onClose={() => setIsRoomDetailsModalOpen(false)}
+          roomNumber={adminDetailRoom}
+          initialProperty={selectedProperty}
+        />
+      )}
+
+      {/* Login Pop-up Notification for Inspector and Admin */}
+      {(isAdmin || isInspector) && (
+        <PendingInspectionLoginModal
+          isOpen={isLoginPopupOpen}
+          onClose={handleCloseLoginPopup}
+          items={pendingInspectionsList}
+        />
+      )}
     </div>
   );
 };

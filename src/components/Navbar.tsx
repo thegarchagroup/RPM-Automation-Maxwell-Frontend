@@ -1,9 +1,10 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ClipboardCheck, Hotel, LogOut, ShieldCheck, UserCheck, RotateCcw, Users, Sliders } from 'lucide-react';
+import { ClipboardCheck, LogOut, ShieldCheck, UserCheck, RotateCcw, Users, Sliders, AlertTriangle } from 'lucide-react';
 import { UserManagementModal } from './UserManagementModal';
 import { FormStructureModal } from './FormStructureModal';
+import { InspectionNotificationBell } from './InspectionNotificationBell';
 
 interface NavbarProps {
   onResetForm?: () => void;
@@ -15,6 +16,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm, onStructureUpdated 
   const navigate = useNavigate();
 
   const handleLogout = () => {
+    sessionStorage.removeItem('hasSeenInspectionLoginPopup');
     logout();
     navigate('/login');
   };
@@ -53,8 +55,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm, onStructureUpdated 
         <div className="flex items-center justify-between h-16">
           {/* Brand */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center text-amber-400 shadow-md">
-              <Hotel className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center p-1 shadow-md overflow-hidden flex-shrink-0">
+              <img
+                src={`${import.meta.env.BASE_URL}Garcha_group_logo.png`}
+                alt="Garcha Group Logo"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (!target.dataset.triedFallback) {
+                    target.dataset.triedFallback = 'true';
+                    target.src = target.src.includes('/rpm/') ? '/Garcha_group_logo.png' : '/rpm/Garcha_group_logo.png';
+                  }
+                }}
+              />
             </div>
             <div>
               <div className="font-brand font-bold text-lg text-slate-900 tracking-wider">
@@ -78,6 +91,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm, onStructureUpdated 
             >
               <span>Dashboard</span>
             </button>
+            {(user?.role === 'admin' || user?.role === 'inspector') && (
+              <button
+                type="button"
+                onClick={() => navigate('/defects')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${window.location.pathname.includes('/defects')
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+              >
+                <AlertTriangle className={`w-3.5 h-3.5 ${window.location.pathname.includes('/defects') ? 'text-white' : 'text-rose-600'}`} />
+                <span>Defects</span>
+              </button>
+            )}
             {user?.role !== 'inspector' && (
               <button
                 type="button"
@@ -128,6 +154,11 @@ export const Navbar: React.FC<NavbarProps> = ({ onResetForm, onStructureUpdated 
                   <span>Users</span>
                 </button>
               </>
+            )}
+
+            {/* Notification Bell for Admin and Inspector */}
+            {(user?.role === 'admin' || user?.role === 'inspector') && (
+              <InspectionNotificationBell />
             )}
 
             {user && (

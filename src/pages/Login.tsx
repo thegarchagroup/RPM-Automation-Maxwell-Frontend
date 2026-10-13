@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { Hotel, KeyRound, ArrowRight, ShieldCheck, UserCheck, ClipboardCheck, ChevronDown, Mail } from 'lucide-react';
+import { KeyRound, ArrowRight, ShieldCheck, UserCheck, ClipboardCheck, ChevronDown, Mail } from 'lucide-react';
 
 const ROLE_NAMES: Record<string, string> = {
   rpm: 'RPM Technician',
@@ -54,8 +54,19 @@ export const Login: React.FC = () => {
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md z-10">
         <div className="flex justify-center">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 flex items-center justify-center text-amber-400 shadow-2xl shadow-black/60">
-            <Hotel className="w-8 h-8" />
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700/80 p-2.5 flex items-center justify-center shadow-2xl shadow-black/60 overflow-hidden">
+            <img
+              src={`${import.meta.env.BASE_URL}Garcha_group_logo.png`}
+              alt="Garcha Group Logo"
+              className="w-full h-full object-contain drop-shadow"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.triedFallback) {
+                  target.dataset.triedFallback = 'true';
+                  target.src = target.src.includes('/rpm/') ? '/Garcha_group_logo.png' : '/rpm/Garcha_group_logo.png';
+                }
+              }}
+            />
           </div>
         </div>
         <h2 className="mt-5 text-center text-3xl font-bold font-brand tracking-wider text-white">

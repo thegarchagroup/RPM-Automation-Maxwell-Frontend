@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './pages/Login';
 import { InspectionForm } from './pages/InspectionForm';
 import { Dashboard } from './pages/Dashboard';
+import { DefectsDashboard } from './pages/DefectsDashboard';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -36,6 +37,14 @@ export function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/defects"
+            element={
+              <ProtectedRoute>
+                <DefectsDashboard />
               </ProtectedRoute>
             }
           />
